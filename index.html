@@ -1,1 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AEGIS // Control Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/face-api.min.js"></script>
+<style>
+  :root{
+    --bg-0:#040810;
+    --bg-1:#081422;
+    --panel:#0b1b2b;
+    --line:#123049;
+    --cyan:#4beeff;
+    --cyan-dim:#1c6b7d;
+    --amber:#ffb03c;
+    --red:#ff4d5e;
+    --green:#3dffb0;
+    --text:#cfe8f2;
+    --text-dim:#5f8ba0;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{
+    width:100%; height:100%;
+    background:radial-gradient(ellipse at 50% -10%, #0c2438 0%, var(--bg-0) 55%);
+    color:var(--text);
+    font-family:'JetBrains Mono', monospace;
+    overflow:hidden;
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  h1,h2,h3,.display{ font-family:'Rajdhani', sans-serif; font-weight:700; letter-spacing:.04em; }
+  .screen{
+    position:fixed; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    flex-direction:column;
+    opacity:0; pointer-events:none;
+    transition:opacity .6s ease;
+  }
+  .screen.active{ opacity:1; pointer-events:auto; }
 
+  /* scanline / vignette overlay across whole app */
+  .crt-overlay{
+    position:fixed; inset:0; pointer-events:none; z-index:999;
+    background:
+      repeating-linear-gradient(to bottom, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 1px, transparent 2px, transparent 3px),
+      radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
+    mix-blend-mode:normal;
+  }
+
+  /* ---------- BOOT SCREEN ---------- */
+  #boot .boot-logo{
+    font-size:3.4rem; color:var(--cyan); letter-spacing:.35em; text-shadow:0 0 24px rgba(75,238,255,.55);
+  }
+  #boot .boot-sub{ margin-top:.6rem; color:var(--text-dim); letter-spacing:.3em; font-size:.85rem; }
+  #boot .boot-log{
+    margin-top:2.5rem; width:520px; max-width:80vw; font-size:.78rem; color:var(--cyan-dim); line-height:1.9;
+    height:9.5rem; overflow:hidden;
+  }
+  #boot .boot-log div{ opacity:0; animation:lineIn .25s forwards; }
+  #boot .boot-log div span.ok{ color:var(--green); }
+  @keyframes lineIn{ to{ opacity:1; } }
+  #boot .boot-bar-wrap{ width:520px; max-width:80vw; height:3px; background:var(--line); margin-top:1.2rem; }
+  #boot .boot-bar{ height:100%; width:0%; background:var(--cyan); box-shadow:0 0 10px var(--cyan); transition:width 2.6s linear; }
+
+  /* ---------- AUTH SCREEN ---------- */
+  #auth .auth-title{ color:var(--text-dim); letter-spacing:.4em; font-size:.85rem; margin-bottom:1.6rem; }
+  .scan-frame{
+    position:relative; width:min(58vw, 420px); aspect-ratio:1/1; border-radius:6px; overflow:hidden;
+    background:#010305; border:1px solid var(--line);
+  }
+  .scan-frame video{
+    position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+    transform:scaleX(-1);
+    filter:saturate(1.15) contrast(1.05) brightness(.95);
+    opacity:.9;
+  }
+  .scan-frame canvas{ position:absolute; inset:0; width:100%; height:100%; }
+  .corner{ position:absolute; width:34px; height:34px; border:2.5px solid var(--cyan); filter:drop-shadow(0 0 6px var(--cyan)); z-index:5; }
+  .corner.tl{ top:-2px; left:-2px; border-right:none; border-bottom:none; }
+  .corner.tr{ top:-2px; right:-2px; border-left:none; border-bottom:none; }
+  .corner.bl{ bottom:-2px; left:-2px; border-right:none; border-top:none; }
+  .corner.br{ bottom:-2px; right:-2px; border-left:none; border-top:none; }
+  .scan-frame.locked .corner{ border-color:var(--green); filter:drop-shadow(0 0 8px var(--green)); }
+  .scan-frame.denied .corner{ border-color:var(--red); filter:drop-shadow(0 0 8px var(--red)); }
+
+  .sweep{
+    position:absolute; left:0; right:0; height:3px;
+    background:linear-gradient(to right, transparent, var(--cyan), transparent);
+    box-shadow:0 0 14px var(--cyan);
+    top:0; animation:sweepMove 2.2s linear infinite;
+    z-index:4;
+  }
+  @keyframes sweepMove{ 0%{ top:0%; } 50%{ top:100%; } 100%{ top:0%; } }
+
+  .reticle{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:4; pointer-events:none;
+  }
+  .reticle svg{ width:70%; height:70%; opacity:.55; }
+
+  .auth-readout{
+    margin-top:1.4rem; width:min(58vw,420px); font-size:.78rem; color:var(--text-dim);
+    display:flex; justify-content:space-between;
+  }
+  .auth-readout .val{ color:var(--cyan); }
+  .auth-status{
+    margin-top:1rem; font-family:'Rajdhani',sans-serif; font-size:1.15rem; letter-spacing:.15em; color:var(--cyan); min-height:1.6rem; text-align:center;
+  }
+  .auth-status.ok{ color:var(--green); }
+  .auth-status.bad{ color:var(--red); }
+
+  .auth-actions{ margin-top:1.4rem; display:flex; gap:.8rem; }
+  .btn{
+    font-family:'Rajdhani',sans-serif; font-weight:600; letter-spacing:.12em; font-size:.9rem;
+    background:transparent; color:var(--cyan); border:1px solid var(--cyan-dim); padding:.6rem 1.3rem;
+    border-radius:3px; cursor:pointer; transition:.2s;
+  }
+  .btn:hover{ background:rgba(75,238,255,.08); border-color:var(--cyan); }
+  .btn.ghost{ color:var(--text-dim); border-color:var(--line); }
+  .btn.ghost:hover{ color:var(--text); border-color:var(--text-dim); }
+  .btn.danger{ color:var(--red); border-color:#5c1f27; }
+
+  /* ---------- DASHBOARD ---------- */
+  #dash{ flex-direction:column; justify-content:flex-start; align-items:stretch; padding:1.6rem 2.2rem; }
+  .topbar{ display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); padding-bottom:.9rem; }
+  .topbar .brand{ font-size:1.3rem; color:var(--cyan); letter-spacing:.25em; }
+  .topbar .brand span{ color:var(--text-dim); font-size:.75rem; letter-spacing:.2em; display:block; margin-top:2px; font-family:'JetBrains Mono'; }
+  .topbar .clock{ text-align:right; }
+  .topbar .clock .time{ font-size:1.5rem; color:var(--text); font-family:'JetBrains Mono'; }
+  .topbar .clock .date{ font-size:.72rem; color:var(--text-dim); letter-spacing:.15em; }
+  .topbar .lock-btn{ font-size:.72rem; color:var(--text-dim); border:1px solid var(--line); padding:.4rem .8rem; border-radius:3px; cursor:pointer; }
+  .topbar .lock-btn:hover{ color:var(--red); border-color:#5c1f27; }
+
+  .grid{ flex:1; display:grid; grid-template-columns:1.1fr 1.4fr 1.1fr; gap:1.1rem; margin-top:1.3rem; min-height:0; }
+  .col{ display:flex; flex-direction:column; gap:1.1rem; min-height:0; }
+  .panel{
+    background:linear-gradient(180deg, rgba(75,238,255,.03), transparent), var(--panel);
+    border:1px solid var(--line); border-radius:6px; padding:1rem 1.1rem; position:relative;
+  }
+  .panel::before{
+    content:''; position:absolute; top:0; left:14px; width:26px; height:2px; background:var(--cyan); box-shadow:0 0 6px var(--cyan);
+  }
+  .panel h3{ font-size:.8rem; letter-spacing:.2em; color:var(--text-dim); font-weight:600; margin-bottom:.7rem; }
+
+  /* status ring */
+  .ring-panel{ display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; }
+  .ring{ position:relative; width:180px; height:180px; }
+  .ring svg{ width:100%; height:100%; transform:rotate(-90deg); }
+  .ring .bg{ fill:none; stroke:var(--line); stroke-width:6; }
+  .ring .fg{ fill:none; stroke:var(--cyan); stroke-width:6; stroke-linecap:round; filter:drop-shadow(0 0 6px var(--cyan)); transition:stroke-dashoffset 1s ease; }
+  .ring-center{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .ring-center .pct{ font-size:1.9rem; color:var(--cyan); font-family:'Rajdhani'; font-weight:700; }
+  .ring-center .lbl{ font-size:.65rem; color:var(--text-dim); letter-spacing:.2em; }
+
+  .metric-row{ display:flex; justify-content:space-between; align-items:center; padding:.5rem 0; border-bottom:1px solid var(--line); font-size:.8rem; }
+  .metric-row:last-child{ border-bottom:none; }
+  .metric-row .m-label{ color:var(--text-dim); letter-spacing:.05em; }
+  .metric-row .m-val{ color:var(--text); }
+  .bar-track{ width:70px; height:5px; background:var(--line); border-radius:3px; overflow:hidden; }
+  .bar-fill{ height:100%; background:var(--cyan); }
+
+  .toggles{ display:flex; flex-direction:column; gap:.55rem; }
+  .toggle-row{ display:flex; justify-content:space-between; align-items:center; font-size:.8rem; }
+  .toggle-row .m-label{ color:var(--text-dim); }
+  .switch{ width:42px; height:22px; border-radius:11px; background:var(--line); border:1px solid var(--cyan-dim); position:relative; cursor:pointer; transition:.2s; }
+  .switch .dot{ position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--text-dim); transition:.2s; }
+  .switch.on{ background:rgba(75,238,255,.12); border-color:var(--cyan); }
+  .switch.on .dot{ left:22px; background:var(--cyan); box-shadow:0 0 8px var(--cyan); }
+
+  .nav-grid{ display:grid; grid-template-columns:1fr 1fr; gap:.6rem; }
+  .nav-tile{
+    border:1px solid var(--line); border-radius:4px; padding:.7rem .5rem; text-align:center; cursor:pointer;
+    color:var(--text-dim); font-family:'Rajdhani'; font-weight:600; letter-spacing:.08em; font-size:.82rem; transition:.15s;
+  }
+  .nav-tile:hover{ border-color:var(--cyan); color:var(--cyan); background:rgba(75,238,255,.05); }
+
+  .log-panel{ flex:1; overflow:hidden; display:flex; flex-direction:column; }
+  .log-list{ overflow:hidden; flex:1; font-size:.72rem; line-height:1.9; color:var(--cyan-dim); }
+  .log-list .t{ color:var(--text-dim); margin-right:.5rem; }
+
+  .ticker-bar{
+    margin-top:1.1rem; border-top:1px solid var(--line); padding-top:.5rem; font-size:.72rem; color:var(--text-dim);
+    letter-spacing:.1em; display:flex; justify-content:space-between;
+  }
+  .ticker-bar .dot-live{ width:6px; height:6px; border-radius:50%; background:var(--green); display:inline-block; margin-right:.4rem; box-shadow:0 0 6px var(--green); }
+
+  ::-webkit-scrollbar{ display:none; }
+</style>
+</head>
+<body>
+
+<!-- BOOT -->
+<div class="screen active" id="boot">
+  <div class="boot-logo">AEGIS</div>
+  <div class="boot-sub">BIOMETRIC ACCESS CONTROL PANEL</div>
+  <div class="boot-log" id="bootLog"></div>
+  <div class="boot-bar-wrap"><div class="boot-bar" id="bootBar"></div></div>
+</div>
+
+<!-- AUTH -->
+<div class="screen" id="auth">
+  <div class="auth-title">IDENTITY VERIFICATION REQUIRED</div>
+  <div class="scan-frame" id="scanFrame">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="corner bl"></div><div class="corner br"></div>
+    <div class="sweep" id="sweep"></div>
+    <div class="reticle">
+      <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="46" fill="none" stroke="#4beeff" stroke-width="0.6" stroke-dasharray="2 4"/><circle cx="50" cy="50" r="34" fill="none" stroke="#4beeff" stroke-width="0.4"/></svg>
+    </div>
+  </div>
+  <div class="auth-readout">
+    <span>MATCH&nbsp;CONF&nbsp;<span class="val" id="confVal">--.-%</span></span>
+    <span>STATE&nbsp;<span class="val" id="stateVal">IDLE</span></span>
+  </div>
+  <div class="auth-status" id="authStatus">Initializing camera…</div>
+  <div class="auth-actions" id="authActions"></div>
+</div>
+
+<!-- DASHBOARD -->
+<div class="screen" id="dash">
+  <div class="topbar">
+    <div class="brand">AEGIS <span>CONTROL PANEL // OPERATOR VERIFIED</span></div>
+    <div class="clock">
+      <div class="time" id="clockTime">00:00:00</div>
+      <div class="date" id="clockDate">—</div>
+    </div>
+    <div class="lock-btn" id="lockBtn">◀ LOCK SESSION</div>
+  </div>
+
+  <div class="grid">
+    <div class="col">
+      <div class="panel ring-panel">
+        <h3 style="align-self:flex-start;">SYSTEM INTEGRITY</h3>
+        <div class="ring">
+          <svg viewBox="0 0 100 100">
+            <circle class="bg" cx="50" cy="50" r="42"/>
+            <circle class="fg" id="ringFg" cx="50" cy="50" r="42" stroke-dasharray="264" stroke-dashoffset="264"/>
+          </svg>
+          <div class="ring-center"><div class="pct" id="ringPct">0%</div><div class="lbl">NOMINAL</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>ENVIRONMENT</h3>
+        <div class="metric-row"><span class="m-label">CABIN TEMP</span><span class="m-val" id="mTemp">—</span></div>
+        <div class="metric-row"><span class="m-label">HUMIDITY</span><span class="m-val" id="mHum">—</span></div>
+        <div class="metric-row"><span class="m-label">LIGHT LVL</span><span class="m-val" id="mLight">—</span></div>
+        <div class="metric-row"><span class="m-label">BATTERY</span><span class="m-val" id="mBatt">—</span></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel">
+        <h3>QUICK CONTROLS</h3>
+        <div class="toggles" id="toggleList"></div>
+      </div>
+      <div class="panel log-panel">
+        <h3>SYSTEM LOG</h3>
+        <div class="log-list" id="dashLog"></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel">
+        <h3>MODULES</h3>
+        <div class="nav-grid" id="navGrid"></div>
+      </div>
+      <div class="panel">
+        <h3>NETWORK</h3>
+        <div class="metric-row"><span class="m-label">LINK</span><span class="m-val" style="color:var(--green)">ONLINE</span></div>
+        <div class="metric-row"><span class="m-label">SIGNAL</span><span class="m-val"><div class="bar-track"><div class="bar-fill" style="width:82%"></div></div></span></div>
+        <div class="metric-row"><span class="m-label">LATENCY</span><span class="m-val" id="mLatency">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ticker-bar">
+    <span><span class="dot-live"></span>AEGIS CORE ACTIVE — ALL SYSTEMS NOMINAL</span>
+    <span id="uptimeVal">UPTIME 00:00:00</span>
+  </div>
+</div>
+
+<div class="crt-overlay"></div>
+
+<script>
+/* ============ UTILITIES ============ */
+const $ = id => document.getElementById(id);
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  $(id).classList.add('active');
+}
+function logLine(container, text, cls){
+  const d = document.createElement('div');
+  d.innerHTML = `<span class="t">${new Date().toLocaleTimeString('en-US',{hour12:false})}</span>${text}`;
+  if(cls) d.classList.add(cls);
+  container.prepend(d);
+  while(container.children.length > 40) container.removeChild(container.lastChild);
+}
+
+/* ============ BOOT SEQUENCE ============ */
+const bootMessages = [
+  'LOADING KERNEL MODULES', 'MOUNTING SENSOR ARRAY', 'CALIBRATING OPTICS',
+  'LOADING FACE-RECOGNITION MODEL', 'INITIALIZING SECURE ENCLAVE',
+  'ESTABLISHING SESSION TOKEN', 'AEGIS CORE READY'
+];
+(function boot(){
+  const log = $('bootLog');
+  let i = 0;
+  const interval = setInterval(()=>{
+    if(i >= bootMessages.length){ clearInterval(interval); return; }
+    const d = document.createElement('div');
+    d.style.animationDelay = '0s';
+    d.innerHTML = `&gt; ${bootMessages[i]} ... <span class="ok">OK</span>`;
+    log.appendChild(d);
+    i++;
+  }, 300);
+  requestAnimationFrame(()=>{ $('bootBar').style.width = '100%'; });
+  setTimeout(()=>{ showScreen('auth'); initAuth(); }, 2700);
+})();
+
+/* ============ FACE AUTH ============ */
+const STORAGE_KEY = 'aegis:face-descriptor';
+const MATCH_THRESHOLD = 0.5; // euclidean distance, lower = stricter
+const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+
+let modelsReady = false;
+let stream = null;
+let enrolledDescriptor = null;
+let consecutiveMatches = 0;
+let consecutiveMisses = 0;
+let scanning = false;
+
+async function loadModels(){
+  await Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+    faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+  ]);
+}
+
+async function loadStoredDescriptor(){
+  try{
+    const res = await window.storage.get(STORAGE_KEY);
+    if(res && res.value){
+      const arr = JSON.parse(res.value);
+      return new Float32Array(arr);
+    }
+  }catch(e){ /* no key yet */ }
+  return null;
+}
+
+async function saveDescriptor(desc){
+  await window.storage.set(STORAGE_KEY, JSON.stringify(Array.from(desc)));
+}
+
+function setAuthActions(buttons){
+  const wrap = $('authActions');
+  wrap.innerHTML = '';
+  buttons.forEach(b=>{
+    const btn = document.createElement('button');
+    btn.className = 'btn ' + (b.cls || '');
+    btn.textContent = b.label;
+    btn.onclick = b.onClick;
+    wrap.appendChild(btn);
+  });
+}
+
+async function initAuth(){
+  $('authStatus').textContent = 'Loading recognition model…';
+  try{
+    await loadModels();
+    modelsReady = true;
+  }catch(e){
+    $('authStatus').textContent = 'Model load failed — offline demo mode';
+    setAuthActions([{label:'ENTER DEMO MODE', onClick: ()=>unlockDashboard()}]);
+    return;
+  }
+
+  enrolledDescriptor = await loadStoredDescriptor();
+
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:480 } });
+    $('video').srcObject = stream;
+  }catch(e){
+    $('authStatus').textContent = 'Camera unavailable — check permissions';
+    setAuthActions([{label:'RETRY', onClick: initAuth}, {label:'SKIP TO DEMO', cls:'ghost', onClick: ()=>unlockDashboard()}]);
+    return;
+  }
+
+  $('video').addEventListener('loadedmetadata', ()=>{
+    const video = $('video'), canvas = $('overlay');
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+
+    if(enrolledDescriptor){
+      $('authStatus').textContent = 'Look into the camera to authenticate';
+      $('stateVal').textContent = 'SCANNING';
+      setAuthActions([{label:'RE-ENROLL FACE', cls:'ghost', onClick: startEnrollment}]);
+      startRecognition();
+    } else {
+      $('authStatus').textContent = 'No enrolled face found. Enroll to continue.';
+      $('stateVal').textContent = 'UNENROLLED';
+      setAuthActions([{label:'ENROLL MY FACE', onClick: startEnrollment}]);
+    }
+  });
+}
+
+async function startEnrollment(){
+  scanning = false;
+  setAuthActions([]);
+  $('authStatus').textContent = 'Hold still — capturing enrollment samples…';
+  $('stateVal').textContent = 'ENROLLING';
+  const samples = [];
+  const video = $('video');
+
+  for(let i=0;i<15;i++){
+    const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks(true).withFaceDescriptor();
+    if(det) samples.push(det.descriptor);
+    $('confVal').textContent = `${Math.round((i+1)/15*100)}%`;
+    await new Promise(r=>setTimeout(r, 120));
+  }
+
+  if(samples.length < 5){
+    $('authStatus').textContent = 'Enrollment failed — face not detected clearly. Try again.';
+    setAuthActions([{label:'RETRY ENROLLMENT', onClick: startEnrollment}]);
+    return;
+  }
+
+  const avg = new Float32Array(samples[0].length);
+  samples.forEach(s => { for(let j=0;j<avg.length;j++) avg[j] += s[j]/samples.length; });
+
+  enrolledDescriptor = avg;
+  await saveDescriptor(avg);
+  $('authStatus').textContent = 'Enrollment complete. Authenticating…';
+  setTimeout(()=>{ setAuthActions([{label:'RE-ENROLL FACE', cls:'ghost', onClick: startEnrollment}]); startRecognition(); }, 800);
+}
+
+function startRecognition(){
+  scanning = true;
+  consecutiveMatches = 0;
+  consecutiveMisses = 0;
+  recognitionLoop();
+}
+
+async function recognitionLoop(){
+  if(!scanning) return;
+  const video = $('video');
+  const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks(true).withFaceDescriptor();
+
+  if(det && enrolledDescriptor){
+    const dist = faceapi.euclideanDistance(det.descriptor, enrolledDescriptor);
+    const conf = Math.max(0, (1 - dist/0.9) * 100);
+    $('confVal').textContent = `${conf.toFixed(1)}%`;
+
+    if(dist < MATCH_THRESHOLD){
+      consecutiveMatches++; consecutiveMisses = 0;
+      $('authStatus').className = 'auth-status';
+      $('authStatus').textContent = `Match confirmed (${consecutiveMatches}/5)`;
+      if(consecutiveMatches >= 5){
+        scanning = false;
+        return grantAccess();
+      }
+    } else {
+      consecutiveMisses++; consecutiveMatches = 0;
+      $('authStatus').textContent = 'Face detected — not recognized';
+      if(consecutiveMisses > 20){
+        scanning = false;
+        return denyAccess();
+      }
+    }
+  } else {
+    $('confVal').textContent = '--.-%';
+    $('authStatus').textContent = 'Searching for face…';
+  }
+
+  setTimeout(recognitionLoop, 180);
+}
+
+function grantAccess(){
+  $('scanFrame').classList.add('locked');
+  $('sweep').style.display = 'none';
+  $('authStatus').className = 'auth-status ok';
+  $('authStatus').textContent = 'ACCESS GRANTED';
+  $('stateVal').textContent = 'VERIFIED';
+  setTimeout(unlockDashboard, 900);
+}
+
+function denyAccess(){
+  $('scanFrame').classList.add('denied');
+  $('authStatus').className = 'auth-status bad';
+  $('authStatus').textContent = 'ACCESS DENIED — timeout';
+  $('stateVal').textContent = 'DENIED';
+  setAuthActions([{label:'TRY AGAIN', onClick: ()=>{
+    $('scanFrame').classList.remove('denied');
+    startRecognition();
+  }}, {label:'RE-ENROLL', cls:'ghost', onClick: startEnrollment}]);
+}
+
+function unlockDashboard(){
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  showScreen('dash');
+  initDashboard();
+}
+
+/* ============ DASHBOARD ============ */
+let dashStart = Date.now();
+function initDashboard(){
+  // clock
+  function tick(){
+    const now = new Date();
+    $('clockTime').textContent = now.toLocaleTimeString('en-US',{hour12:false});
+    $('clockDate').textContent = now.toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'}).toUpperCase();
+    const up = Date.now() - dashStart;
+    const h = String(Math.floor(up/3600000)).padStart(2,'0');
+    const m = String(Math.floor((up%3600000)/60000)).padStart(2,'0');
+    const s = String(Math.floor((up%60000)/1000)).padStart(2,'0');
+    $('uptimeVal').textContent = `UPTIME ${h}:${m}:${s}`;
+  }
+  tick(); setInterval(tick, 1000);
+
+  // system integrity ring
+  let pct = 0;
+  const ring = $('ringFg'), circumference = 264;
+  const target = 87 + Math.floor(Math.random()*10);
+  const ringAnim = setInterval(()=>{
+    pct = Math.min(target, pct + 3);
+    ring.style.strokeDashoffset = circumference - (circumference*pct/100);
+    $('ringPct').textContent = pct + '%';
+    if(pct >= target) clearInterval(ringAnim);
+  }, 30);
+
+  // simulated environment metrics
+  $('mTemp').textContent = (21 + Math.random()*2).toFixed(1) + '°C';
+  $('mHum').textContent = Math.round(38 + Math.random()*10) + '%';
+  $('mLight').textContent = Math.round(400 + Math.random()*250) + ' LUX';
+  if(navigator.getBattery){
+    navigator.getBattery().then(b=>{ $('mBatt').textContent = Math.round(b.level*100) + '%'; });
+  } else {
+    $('mBatt').textContent = Math.round(60+Math.random()*35) + '%';
+  }
+  $('mLatency').textContent = Math.round(10+Math.random()*25) + ' MS';
+
+  // toggles
+  const toggles = [
+    {label:'CABIN LIGHTING', on:true},
+    {label:'DO NOT DISTURB', on:false},
+    {label:'AUTO-LOCK', on:true},
+    {label:'MOTION ALERTS', on:false},
+  ];
+  const tWrap = $('toggleList');
+  tWrap.innerHTML = '';
+  toggles.forEach(t=>{
+    const row = document.createElement('div'); row.className = 'toggle-row';
+    row.innerHTML = `<span class="m-label">${t.label}</span>`;
+    const sw = document.createElement('div');
+    sw.className = 'switch' + (t.on ? ' on' : '');
+    sw.innerHTML = '<div class="dot"></div>';
+    sw.onclick = ()=>{
+      sw.classList.toggle('on');
+      logLine($('dashLog'), ` ${t.label} ${sw.classList.contains('on') ? 'ENABLED' : 'DISABLED'}`);
+    };
+    row.appendChild(sw);
+    tWrap.appendChild(row);
+  });
+
+  // nav modules
+  const modules = ['CAMERAS','CLIMATE','ACCESS LOG','DIAGNOSTICS','NETWORK','SETTINGS'];
+  const navGrid = $('navGrid');
+  navGrid.innerHTML = '';
+  modules.forEach(m=>{
+    const tile = document.createElement('div');
+    tile.className = 'nav-tile';
+    tile.textContent = m;
+    tile.onclick = ()=> logLine($('dashLog'), ` MODULE OPENED: ${m}`);
+    navGrid.appendChild(tile);
+  });
+
+  // initial log
+  const dashLog = $('dashLog');
+  dashLog.innerHTML = '';
+  logLine(dashLog, ' OPERATOR VERIFIED — SESSION START');
+  logLine(dashLog, ' SYSTEM INTEGRITY CHECK PASSED');
+  logLine(dashLog, ' ALL SUBSYSTEMS NOMINAL');
+
+  // lock button
+  $('lockBtn').onclick = ()=>{
+    showScreen('auth');
+    $('scanFrame').classList.remove('locked','denied');
+    $('sweep').style.display = 'block';
+    $('authStatus').className = 'auth-status';
+    initAuth();
+  };
+}
+</script>
+</body>
+</html>
