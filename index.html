@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -121,6 +120,11 @@
   .auth-status.bad{ color:var(--red); }
 
   .auth-actions{ margin-top:1.4rem; display:flex; gap:.8rem; }
+  .skip-link{
+    position:fixed; bottom:1.4rem; right:1.6rem; font-family:'JetBrains Mono'; font-size:.7rem;
+    color:var(--text-dim); border:1px solid var(--line); padding:.4rem .8rem; cursor:pointer; letter-spacing:.1em; opacity:.6;
+  }
+  .skip-link:hover{ opacity:1; color:var(--cyan); border-color:var(--cyan-dim); }
   .btn{
     font-family:'Rajdhani',sans-serif; font-weight:600; letter-spacing:.12em; font-size:.9rem;
     background:transparent; color:var(--cyan); border:1px solid var(--cyan-dim); padding:.6rem 1.3rem;
@@ -262,6 +266,7 @@
   </div>
   <div class="auth-status" id="authStatus">Initializing camera…</div>
   <div class="auth-actions" id="authActions"></div>
+  <div class="skip-link" id="skipLink">SKIP → DEMO MODE</div>
 </div>
 
 <!-- DASHBOARD -->
@@ -450,10 +455,11 @@ function closePinModal(){
 }
 
 $('pinCancel').onclick = closePinModal;
+$('skipLink').onclick = ()=>{ scanning = false; if(stream) stream.getTracks().forEach(t=>t.stop()); unlockDashboard(); };
 
 /* ============ FACE AUTH ============ */
 const STORAGE_KEY = 'aegis:face-descriptor';
-const MATCH_THRESHOLD = 0.5; // euclidean distance, lower = stricter
+const MATCH_THRESHOLD = 1.4; // euclidean distance over the geometric fingerprint — tune per device, see console log
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 let modelsReady = false;
@@ -463,12 +469,48 @@ let consecutiveMatches = 0;
 let consecutiveMisses = 0;
 let scanning = false;
 
+let cpuBackendForced = false;
+async function tryForceCpuBackend(){
+  try{
+    const tf = faceapi.tf || window.tf;
+    if(tf && tf.setBackend){
+      await tf.setBackend('cpu');
+      await tf.ready();
+      cpuBackendForced = true;
+      console.info('AEGIS: forced tfjs CPU backend (avoids WebGL hangs on some mobile GPUs)');
+    }
+  }catch(e){
+    console.warn('AEGIS: could not force cpu backend', e);
+  }
+}
+
 async function loadModels(){
+  await tryForceCpuBackend();
+  // Lightweight mode: detector + landmarks only. We skip faceRecognitionNet
+  // (the ~6.2MB deep embedding model) entirely and match on face geometry
+  // instead — far less compute, at the cost of being a looser match.
   await Promise.all([
     faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-    faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
-    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+    faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL)
   ]);
+}
+
+// Build a normalized "shape fingerprint" from 68 landmarks: every point
+// expressed relative to the eye-center midpoint and scaled by inter-ocular
+// distance, so it's robust to the face being closer/farther/slightly rotated.
+function computeGeoDescriptor(landmarks){
+  const pts = landmarks.positions;
+  const avg = (arr) => arr.reduce((a,p)=>({x:a.x+p.x/arr.length, y:a.y+p.y/arr.length}), {x:0,y:0});
+  const leftEye = avg(pts.slice(36,42));
+  const rightEye = avg(pts.slice(42,48));
+  const interOcular = Math.hypot(rightEye.x-leftEye.x, rightEye.y-leftEye.y) || 1;
+  const cx = (leftEye.x+rightEye.x)/2, cy = (leftEye.y+rightEye.y)/2;
+  const vec = new Float32Array(pts.length*2);
+  pts.forEach((p,i)=>{
+    vec[i*2]   = (p.x-cx)/interOcular;
+    vec[i*2+1] = (p.y-cy)/interOcular;
+  });
+  return vec;
 }
 
 async function loadStoredDescriptor(){
@@ -515,6 +557,7 @@ async function initAuth(){
     setAuthActions([{label:'RETRY', onClick: initAuth}, {label:'ENTER DEMO MODE', cls:'ghost', onClick: ()=>unlockDashboard()}]);
     return;
   }
+  console.info('AEGIS: backend =', cpuBackendForced ? 'cpu (forced)' : 'webgl (default)');
 
   enrolledDescriptor = await loadStoredDescriptor();
 
@@ -547,7 +590,7 @@ async function initAuth(){
 async function detectWithTimeout(video, ms){
   return Promise.race([
     faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 }))
-      .withFaceLandmarks(true).withFaceDescriptor(),
+      .withFaceLandmarks(true),
     new Promise((_, reject) => setTimeout(()=>reject(new Error('detect-timeout')), ms))
   ]);
 }
@@ -582,7 +625,7 @@ async function startEnrollment(){
     for(let attempt=0; attempt<3 && !captured; attempt++){
       try{
         const det = await detectWithTimeout(video, 6000);
-        if(det){ samples.push(det.descriptor); captured = true; }
+        if(det){ samples.push(computeGeoDescriptor(det.landmarks)); captured = true; }
       }catch(e){
         console.warn('AEGIS enrollment attempt failed:', e.message);
       }
@@ -629,8 +672,10 @@ async function recognitionLoop(){
   }
 
   if(det && enrolledDescriptor){
-    const dist = faceapi.euclideanDistance(det.descriptor, enrolledDescriptor);
-    const conf = Math.max(0, (1 - dist/0.9) * 100);
+    const liveDesc = computeGeoDescriptor(det.landmarks);
+    const dist = faceapi.euclideanDistance(liveDesc, enrolledDescriptor);
+    console.debug('AEGIS match distance:', dist.toFixed(3), '(threshold', MATCH_THRESHOLD + ')');
+    const conf = Math.max(0, (1 - dist/2.5) * 100);
     $('confVal').textContent = `${conf.toFixed(1)}%`;
 
     if(dist < MATCH_THRESHOLD){
@@ -775,4 +820,3 @@ function initDashboard(){
 </script>
 </body>
 </html>
-
