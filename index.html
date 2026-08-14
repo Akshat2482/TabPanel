@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -518,7 +519,7 @@ async function initAuth(){
   enrolledDescriptor = await loadStoredDescriptor();
 
   try{
-    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:480 } });
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:320, height:320 } });
     $('video').srcObject = stream;
   }catch(e){
     $('authStatus').textContent = 'Camera unavailable — check permissions';
@@ -545,7 +546,7 @@ async function initAuth(){
 
 async function detectWithTimeout(video, ms){
   return Promise.race([
-    faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+    faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 }))
       .withFaceLandmarks(true).withFaceDescriptor(),
     new Promise((_, reject) => setTimeout(()=>reject(new Error('detect-timeout')), ms))
   ]);
@@ -557,38 +558,46 @@ async function startEnrollment(){
   $('stateVal').textContent = 'ENROLLING';
   const video = $('video');
 
+  // One full descriptor capture per pose instead of several — the descriptor
+  // computation is the heaviest op in the whole pipeline, and doing it 15x
+  // back-to-back is what freezes weaker tablet GPUs. 5 poses is plenty.
   const posePlan = [
-    { label:'Look straight ahead', count:4 },
-    { label:'Turn your head LEFT',  count:3 },
-    { label:'Turn your head RIGHT', count:3 },
-    { label:'Tilt your head UP',    count:2 },
-    { label:'Tilt your head DOWN',  count:3 },
+    'Look straight ahead',
+    'Turn your head LEFT',
+    'Turn your head RIGHT',
+    'Tilt your head UP',
+    'Tilt your head DOWN',
   ];
-  const totalSamples = posePlan.reduce((s,p)=>s+p.count, 0);
   const samples = [];
-  let captured = 0;
 
-  for(const pose of posePlan){
-    $('authStatus').textContent = pose.label + ' — hold it';
-    // brief pause so the user has time to move into position
-    await new Promise(r=>setTimeout(r, 700));
+  for(let p=0; p<posePlan.length; p++){
+    const label = posePlan[p];
+    $('authStatus').textContent = `${label} — get ready (${p+1}/${posePlan.length})`;
+    $('confVal').textContent = `${Math.round(p/posePlan.length*100)}%`;
+    await new Promise(r=>setTimeout(r, 900)); // time to move into position
 
-    for(let i=0; i<pose.count; i++){
-      $('authStatus').textContent = `${pose.label} (${captured+1}/${totalSamples})`;
+    $('authStatus').textContent = `${label} — hold still…`;
+
+    let captured = false;
+    for(let attempt=0; attempt<3 && !captured; attempt++){
       try{
-        const det = await detectWithTimeout(video, 3500);
-        if(det) samples.push(det.descriptor);
+        const det = await detectWithTimeout(video, 6000);
+        if(det){ samples.push(det.descriptor); captured = true; }
       }catch(e){
-        console.warn('AEGIS enrollment sample skipped:', e.message);
+        console.warn('AEGIS enrollment attempt failed:', e.message);
       }
-      captured++;
-      $('confVal').textContent = `${Math.round(captured/totalSamples*100)}%`;
-      await new Promise(r=>setTimeout(r, 180));
+      // yield a beat so the UI can repaint / timers can catch up before retrying
+      await new Promise(r=>setTimeout(r, 150));
+    }
+    if(!captured){
+      $('authStatus').textContent = `${label} — couldn't get a clear read, skipping`;
+      await new Promise(r=>setTimeout(r, 500));
     }
   }
+  $('confVal').textContent = '100%';
 
-  if(samples.length < 6){
-    $('authStatus').textContent = `Enrollment failed — only ${samples.length}/${totalSamples} clear samples. Try better lighting.`;
+  if(samples.length < 3){
+    $('authStatus').textContent = `Enrollment failed — only ${samples.length}/${posePlan.length} poses captured. Try better lighting.`;
     setAuthActions([{label:'RETRY ENROLLMENT', onClick: startEnrollment}]);
     return;
   }
@@ -598,7 +607,7 @@ async function startEnrollment(){
 
   enrolledDescriptor = avg;
   await saveDescriptor(avg);
-  $('authStatus').textContent = `Enrollment complete (${samples.length}/${totalSamples} samples). Authenticating…`;
+  $('authStatus').textContent = `Enrollment complete (${samples.length}/${posePlan.length} poses). Authenticating…`;
   setTimeout(()=>{ setAuthActions([{label:'RE-ENROLL FACE', cls:'ghost', onClick: ()=>requirePinThen(startEnrollment)}]); startRecognition(); }, 900);
 }
 
@@ -766,3 +775,4 @@ function initDashboard(){
 </script>
 </body>
 </html>
+
