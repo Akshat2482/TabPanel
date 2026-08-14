@@ -6,7 +6,7 @@
 <title>AEGIS // Control Panel</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/face-api.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 <style>
   :root{
     --bg-0:#040810;
@@ -499,6 +499,12 @@ function setAuthActions(buttons){
 
 async function initAuth(){
   $('authStatus').textContent = 'Loading recognition model…';
+  if(typeof faceapi === 'undefined'){
+    console.error('AEGIS: face-api.js library script did not load.');
+    $('authStatus').textContent = 'Face recognition library failed to load (check network/CDN)';
+    setAuthActions([{label:'RETRY', onClick: initAuth}, {label:'ENTER DEMO MODE', cls:'ghost', onClick: ()=>unlockDashboard()}]);
+    return;
+  }
   try{
     await loadModels();
     modelsReady = true;
