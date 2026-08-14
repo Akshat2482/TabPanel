@@ -543,24 +543,52 @@ async function initAuth(){
   });
 }
 
+async function detectWithTimeout(video, ms){
+  return Promise.race([
+    faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks(true).withFaceDescriptor(),
+    new Promise((_, reject) => setTimeout(()=>reject(new Error('detect-timeout')), ms))
+  ]);
+}
+
 async function startEnrollment(){
   scanning = false;
   setAuthActions([]);
-  $('authStatus').textContent = 'Hold still — capturing enrollment samples…';
   $('stateVal').textContent = 'ENROLLING';
-  const samples = [];
   const video = $('video');
 
-  for(let i=0;i<15;i++){
-    const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks(true).withFaceDescriptor();
-    if(det) samples.push(det.descriptor);
-    $('confVal').textContent = `${Math.round((i+1)/15*100)}%`;
-    await new Promise(r=>setTimeout(r, 120));
+  const posePlan = [
+    { label:'Look straight ahead', count:4 },
+    { label:'Turn your head LEFT',  count:3 },
+    { label:'Turn your head RIGHT', count:3 },
+    { label:'Tilt your head UP',    count:2 },
+    { label:'Tilt your head DOWN',  count:3 },
+  ];
+  const totalSamples = posePlan.reduce((s,p)=>s+p.count, 0);
+  const samples = [];
+  let captured = 0;
+
+  for(const pose of posePlan){
+    $('authStatus').textContent = pose.label + ' — hold it';
+    // brief pause so the user has time to move into position
+    await new Promise(r=>setTimeout(r, 700));
+
+    for(let i=0; i<pose.count; i++){
+      $('authStatus').textContent = `${pose.label} (${captured+1}/${totalSamples})`;
+      try{
+        const det = await detectWithTimeout(video, 3500);
+        if(det) samples.push(det.descriptor);
+      }catch(e){
+        console.warn('AEGIS enrollment sample skipped:', e.message);
+      }
+      captured++;
+      $('confVal').textContent = `${Math.round(captured/totalSamples*100)}%`;
+      await new Promise(r=>setTimeout(r, 180));
+    }
   }
 
-  if(samples.length < 5){
-    $('authStatus').textContent = 'Enrollment failed — face not detected clearly. Try again.';
+  if(samples.length < 6){
+    $('authStatus').textContent = `Enrollment failed — only ${samples.length}/${totalSamples} clear samples. Try better lighting.`;
     setAuthActions([{label:'RETRY ENROLLMENT', onClick: startEnrollment}]);
     return;
   }
@@ -570,8 +598,8 @@ async function startEnrollment(){
 
   enrolledDescriptor = avg;
   await saveDescriptor(avg);
-  $('authStatus').textContent = 'Enrollment complete. Authenticating…';
-  setTimeout(()=>{ setAuthActions([{label:'RE-ENROLL FACE', cls:'ghost', onClick: ()=>requirePinThen(startEnrollment)}]); startRecognition(); }, 800);
+  $('authStatus').textContent = `Enrollment complete (${samples.length}/${totalSamples} samples). Authenticating…`;
+  setTimeout(()=>{ setAuthActions([{label:'RE-ENROLL FACE', cls:'ghost', onClick: ()=>requirePinThen(startEnrollment)}]); startRecognition(); }, 900);
 }
 
 function startRecognition(){
@@ -584,8 +612,12 @@ function startRecognition(){
 async function recognitionLoop(){
   if(!scanning) return;
   const video = $('video');
-  const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-    .withFaceLandmarks(true).withFaceDescriptor();
+  let det = null;
+  try{
+    det = await detectWithTimeout(video, 3500);
+  }catch(e){
+    // timeout or detection error — just skip this frame
+  }
 
   if(det && enrolledDescriptor){
     const dist = faceapi.euclideanDistance(det.descriptor, enrolledDescriptor);
