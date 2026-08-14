@@ -41,11 +41,13 @@
   }
   .screen.active{ opacity:1; pointer-events:auto; }
 
+  /* scanline / vignette overlay across whole app */
   .crt-overlay{
     position:fixed; inset:0; pointer-events:none; z-index:999;
     background:
       repeating-linear-gradient(to bottom, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 1px, transparent 2px, transparent 3px),
       radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
+    mix-blend-mode:normal;
   }
 
   /* ---------- BOOT SCREEN ---------- */
@@ -118,16 +120,6 @@
   .auth-status.bad{ color:var(--red); }
 
   .auth-actions{ margin-top:1.4rem; display:flex; gap:.8rem; }
-  .btn{
-    font-family:'Rajdhani',sans-serif; font-weight:600; letter-spacing:.12em; font-size:.9rem;
-    background:transparent; color:var(--cyan); border:1px solid var(--cyan-dim); padding:.6rem 1.3rem;
-    border-radius:3px; cursor:pointer; transition:.2s;
-  }
-  .btn:hover{ background:rgba(75,238,255,.08); border-color:var(--cyan); }
-  .btn.ghost{ color:var(--text-dim); border-color:var(--line); }
-  .btn.ghost:hover{ color:var(--text); border-color:var(--text-dim); }
-  .btn.danger{ color:var(--red); border-color:#5c1f27; }
-
   .skip-link{
     position:fixed; bottom:1.4rem; right:1.6rem; font-family:'JetBrains Mono'; font-size:.7rem;
     color:var(--text-dim); border:1px solid var(--line); padding:.4rem .8rem; cursor:pointer; letter-spacing:.1em; opacity:.6;
@@ -141,6 +133,15 @@
   }
   .debug-log div{ white-space:pre-wrap; word-break:break-word; }
   .debug-log .err{ color:var(--red); }
+  .btn{
+    font-family:'Rajdhani',sans-serif; font-weight:600; letter-spacing:.12em; font-size:.9rem;
+    background:transparent; color:var(--cyan); border:1px solid var(--cyan-dim); padding:.6rem 1.3rem;
+    border-radius:3px; cursor:pointer; transition:.2s;
+  }
+  .btn:hover{ background:rgba(75,238,255,.08); border-color:var(--cyan); }
+  .btn.ghost{ color:var(--text-dim); border-color:var(--line); }
+  .btn.ghost:hover{ color:var(--text); border-color:var(--text-dim); }
+  .btn.danger{ color:var(--red); border-color:#5c1f27; }
 
   /* ---------- DASHBOARD ---------- */
   #dash{ flex-direction:column; justify-content:flex-start; align-items:stretch; padding:1.6rem 2.2rem; }
@@ -164,6 +165,7 @@
   }
   .panel h3{ font-size:.8rem; letter-spacing:.2em; color:var(--text-dim); font-weight:600; margin-bottom:.7rem; }
 
+  /* status gauge — square/bracket, no circles */
   .ring-panel{ display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; }
   .gauge{ position:relative; width:170px; height:170px; border:1.5px solid var(--line); }
   .gauge::before, .gauge::after,
@@ -211,6 +213,7 @@
   }
   .ticker-bar .dot-live{ width:7px; height:7px; background:var(--green); display:inline-block; margin-right:.4rem; box-shadow:0 0 6px var(--green); }
 
+  /* ---------- PIN MODAL ---------- */
   #pinModal{
     position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
     background:rgba(2,6,12,.85); backdrop-filter:blur(3px);
@@ -232,6 +235,7 @@
     border:1px solid var(--line); padding:.7rem 0; text-align:center; cursor:pointer; transition:.15s;
   }
   .pin-key:hover{ border-color:var(--cyan); color:var(--cyan); }
+  .pin-key.wide{ grid-column:span 1; }
   .pin-error{ color:var(--red); font-size:.72rem; text-align:center; margin-top:.7rem; letter-spacing:.1em; min-height:1rem; }
   .pin-cancel{ margin-top:.9rem; width:100%; }
 
@@ -240,6 +244,7 @@
 </head>
 <body>
 
+<!-- BOOT -->
 <div class="screen active" id="boot">
   <div class="boot-logo">AEGIS</div>
   <div class="boot-sub">BIOMETRIC ACCESS CONTROL PANEL</div>
@@ -247,6 +252,7 @@
   <div class="boot-bar-wrap"><div class="boot-bar" id="bootBar"></div></div>
 </div>
 
+<!-- AUTH -->
 <div class="screen" id="auth">
   <div class="auth-title">IDENTITY VERIFICATION REQUIRED</div>
   <div class="scan-frame" id="scanFrame">
@@ -273,6 +279,7 @@
   <div class="skip-link" id="skipLink">SKIP → DEMO MODE</div>
 </div>
 
+<!-- DASHBOARD -->
 <div class="screen" id="dash">
   <div class="topbar">
     <div class="brand">AEGIS <span>CONTROL PANEL // OPERATOR VERIFIED</span></div>
@@ -354,10 +361,11 @@ function goFullscreen(){
   const el = document.documentElement;
   const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
   if(req && !document.fullscreenElement){
-    req.call(el).catch(()=>{});
+    req.call(el).catch(()=>{ /* blocked without a user gesture — fallback listener below handles it */ });
   }
 }
 goFullscreen();
+// Most mobile browsers require a user gesture — grab the very first tap/click as a fallback.
 document.addEventListener('click', function firstTapFullscreen(){
   goFullscreen();
   document.removeEventListener('click', firstTapFullscreen);
@@ -376,6 +384,10 @@ function dlog(msg, isErr){
     el.scrollTop = el.scrollHeight;
   }
   (isErr ? console.error : console.log)('AEGIS:', msg);
+}
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  $(id).classList.add('active');
 }
 function logLine(container, text, cls){
   const d = document.createElement('div');
@@ -397,6 +409,7 @@ const bootMessages = [
   const interval = setInterval(()=>{
     if(i >= bootMessages.length){ clearInterval(interval); return; }
     const d = document.createElement('div');
+    d.style.animationDelay = '0s';
     d.innerHTML = `&gt; ${bootMessages[i]} ... <span class="ok">OK</span>`;
     log.appendChild(d);
     i++;
@@ -404,11 +417,6 @@ const bootMessages = [
   requestAnimationFrame(()=>{ $('bootBar').style.width = '100%'; });
   setTimeout(()=>{ showScreen('auth'); initAuth(); }, 2700);
 })();
-
-function showScreen(id){
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  $(id).classList.add('active');
-}
 
 /* ============ PIN GATE ============ */
 const RE_ENROLL_PIN = '2402';
@@ -427,12 +435,14 @@ function buildPinKeypad(){
     wrap.appendChild(btn);
   });
 }
+
 function renderPinDots(){
   const dots = $('pinDots').children;
   for(let i=0;i<dots.length;i++){
     dots[i].classList.toggle('filled', i < pinEntry.length);
   }
 }
+
 function handlePinKey(k){
   if(k === 'CLR'){ pinEntry = ''; $('pinError').textContent=''; renderPinDots(); return; }
   if(k === 'DEL'){ pinEntry = pinEntry.slice(0,-1); $('pinError').textContent=''; renderPinDots(); return; }
@@ -450,6 +460,7 @@ function handlePinKey(k){
     }
   }
 }
+
 function requirePinThen(callback){
   pinEntry = '';
   pinResolveCallback = callback;
@@ -458,11 +469,13 @@ function requirePinThen(callback){
   renderPinDots();
   $('pinModal').classList.add('active');
 }
+
 function closePinModal(){
   $('pinModal').classList.remove('active');
   pinEntry = '';
   pinResolveCallback = null;
 }
+
 $('pinCancel').onclick = closePinModal;
 $('skipLink').onclick = ()=>{ scanning = false; if(stream) stream.getTracks().forEach(t=>t.stop()); unlockDashboard(); };
 $('pinLoginLink').onclick = ()=>{
@@ -475,7 +488,7 @@ $('pinLoginLink').onclick = ()=>{
 
 /* ============ FACE AUTH ============ */
 const STORAGE_KEY = 'aegis:face-descriptor';
-const MATCH_THRESHOLD = 1.4;
+const MATCH_THRESHOLD = 1.4; // euclidean distance over the geometric fingerprint — tune per device, see console log
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 let modelsReady = false;
@@ -484,8 +497,8 @@ let enrolledDescriptor = null;
 let consecutiveMatches = 0;
 let consecutiveMisses = 0;
 let scanning = false;
-let cpuBackendForced = false;
 
+let cpuBackendForced = false;
 async function tryForceCpuBackend(){
   dlog('attempting to force cpu backend...');
   try{
@@ -513,6 +526,9 @@ async function loadModels(){
   dlog('faceLandmark68TinyNet loaded');
 }
 
+// Build a normalized "shape fingerprint" from 68 landmarks: every point
+// expressed relative to the eye-center midpoint and scaled by inter-ocular
+// distance, so it's robust to the face being closer/farther/slightly rotated.
 function computeGeoDescriptor(landmarks){
   const pts = landmarks.positions;
   const avg = (arr) => arr.reduce((a,p)=>({x:a.x+p.x/arr.length, y:a.y+p.y/arr.length}), {x:0,y:0});
@@ -530,16 +546,22 @@ function computeGeoDescriptor(landmarks){
 
 async function loadStoredDescriptor(){
   try{
-    const res = await window.storage.get(STORAGE_KEY);
-    if(res && res.value){
-      const arr = JSON.parse(res.value);
-      return new Float32Array(arr);
-    }
-  }catch(e){ /* no key yet */ }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw) return new Float32Array(JSON.parse(raw));
+  }catch(e){
+    dlog('loadStoredDescriptor error: ' + e.message, true);
+  }
   return null;
 }
+
 async function saveDescriptor(desc){
-  await window.storage.set(STORAGE_KEY, JSON.stringify(Array.from(desc)));
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(desc)));
+    dlog('descriptor saved to localStorage (' + desc.length + ' values)');
+  }catch(e){
+    dlog('saveDescriptor error: ' + e.message, true);
+    throw e;
+  }
 }
 
 function setAuthActions(buttons){
@@ -621,6 +643,9 @@ async function startEnrollment(){
   $('stateVal').textContent = 'ENROLLING';
   const video = $('video');
 
+  // One full descriptor capture per pose instead of several — the descriptor
+  // computation is the heaviest op in the whole pipeline, and doing it 15x
+  // back-to-back is what freezes weaker tablet GPUs. 5 poses is plenty.
   const posePlan = [
     'Look straight ahead',
     'Turn your head LEFT',
@@ -634,7 +659,7 @@ async function startEnrollment(){
     const label = posePlan[p];
     $('authStatus').textContent = `${label} — get ready (${p+1}/${posePlan.length})`;
     $('confVal').textContent = `${Math.round(p/posePlan.length*100)}%`;
-    await new Promise(r=>setTimeout(r, 900));
+    await new Promise(r=>setTimeout(r, 900)); // time to move into position
 
     $('authStatus').textContent = `${label} — hold still…`;
 
@@ -656,6 +681,7 @@ async function startEnrollment(){
         const ms = Math.round(performance.now()-t0);
         dlog(`pose "${label}" attempt ${attempt+1}: FAILED after ${ms}ms — ${e.message}`, true);
       }
+      // yield a beat so the UI can repaint / timers can catch up before retrying
       await new Promise(r=>setTimeout(r, 150));
     }
     if(!captured){
@@ -664,6 +690,7 @@ async function startEnrollment(){
     }
   }
   $('confVal').textContent = '100%';
+  dlog(`enrollment loop complete: ${samples.length}/${posePlan.length} poses captured`);
 
   if(samples.length < 3){
     $('authStatus').textContent = `Enrollment failed — only ${samples.length}/${posePlan.length} poses captured. Try better lighting.`;
@@ -675,7 +702,9 @@ async function startEnrollment(){
   samples.forEach(s => { for(let j=0;j<avg.length;j++) avg[j] += s[j]/samples.length; });
 
   enrolledDescriptor = avg;
+  dlog('saving descriptor...');
   await saveDescriptor(avg);
+  dlog('descriptor saved, proceeding to authenticate');
   $('authStatus').textContent = `Enrollment complete (${samples.length}/${posePlan.length} poses). Authenticating…`;
   setTimeout(()=>{ setAuthActions([{label:'RE-ENROLL FACE', cls:'ghost', onClick: ()=>requirePinThen(startEnrollment)}]); startRecognition(); }, 900);
 }
@@ -693,7 +722,9 @@ async function recognitionLoop(){
   let det = null;
   try{
     det = await detectWithTimeout(video, 3500);
-  }catch(e){ /* skip frame */ }
+  }catch(e){
+    // timeout or detection error — just skip this frame
+  }
 
   if(det && enrolledDescriptor){
     const liveDesc = computeGeoDescriptor(det.landmarks);
@@ -755,6 +786,7 @@ function unlockDashboard(){
 /* ============ DASHBOARD ============ */
 let dashStart = Date.now();
 function initDashboard(){
+  // clock
   function tick(){
     const now = new Date();
     $('clockTime').textContent = now.toLocaleTimeString('en-US',{hour12:false});
@@ -767,6 +799,7 @@ function initDashboard(){
   }
   tick(); setInterval(tick, 1000);
 
+  // system integrity gauge (square fill, no circles)
   let pct = 0;
   const fill = $('gaugeFill');
   const target = 87 + Math.floor(Math.random()*10);
@@ -777,6 +810,7 @@ function initDashboard(){
     if(pct >= target) clearInterval(gaugeAnim);
   }, 30);
 
+  // simulated environment metrics
   $('mTemp').textContent = (21 + Math.random()*2).toFixed(1) + '°C';
   $('mHum').textContent = Math.round(38 + Math.random()*10) + '%';
   $('mLight').textContent = Math.round(400 + Math.random()*250) + ' LUX';
@@ -787,6 +821,7 @@ function initDashboard(){
   }
   $('mLatency').textContent = Math.round(10+Math.random()*25) + ' MS';
 
+  // toggles
   const toggles = [
     {label:'CABIN LIGHTING', on:true},
     {label:'DO NOT DISTURB', on:false},
@@ -809,6 +844,7 @@ function initDashboard(){
     tWrap.appendChild(row);
   });
 
+  // nav modules
   const modules = ['CAMERAS','CLIMATE','ACCESS LOG','DIAGNOSTICS','NETWORK','SETTINGS'];
   const navGrid = $('navGrid');
   navGrid.innerHTML = '';
@@ -820,12 +856,14 @@ function initDashboard(){
     navGrid.appendChild(tile);
   });
 
+  // initial log
   const dashLog = $('dashLog');
   dashLog.innerHTML = '';
   logLine(dashLog, ' OPERATOR VERIFIED — SESSION START');
   logLine(dashLog, ' SYSTEM INTEGRITY CHECK PASSED');
   logLine(dashLog, ' ALL SUBSYSTEMS NOMINAL');
 
+  // lock button
   $('lockBtn').onclick = ()=>{
     showScreen('auth');
     $('scanFrame').classList.remove('locked','denied');
