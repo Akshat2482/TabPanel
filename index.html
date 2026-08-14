@@ -41,13 +41,11 @@
   }
   .screen.active{ opacity:1; pointer-events:auto; }
 
-  /* scanline / vignette overlay across whole app */
   .crt-overlay{
     position:fixed; inset:0; pointer-events:none; z-index:999;
     background:
       repeating-linear-gradient(to bottom, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 1px, transparent 2px, transparent 3px),
       radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%);
-    mix-blend-mode:normal;
   }
 
   /* ---------- BOOT SCREEN ---------- */
@@ -120,11 +118,6 @@
   .auth-status.bad{ color:var(--red); }
 
   .auth-actions{ margin-top:1.4rem; display:flex; gap:.8rem; }
-  .skip-link{
-    position:fixed; bottom:1.4rem; right:1.6rem; font-family:'JetBrains Mono'; font-size:.7rem;
-    color:var(--text-dim); border:1px solid var(--line); padding:.4rem .8rem; cursor:pointer; letter-spacing:.1em; opacity:.6;
-  }
-  .skip-link:hover{ opacity:1; color:var(--cyan); border-color:var(--cyan-dim); }
   .btn{
     font-family:'Rajdhani',sans-serif; font-weight:600; letter-spacing:.12em; font-size:.9rem;
     background:transparent; color:var(--cyan); border:1px solid var(--cyan-dim); padding:.6rem 1.3rem;
@@ -134,6 +127,20 @@
   .btn.ghost{ color:var(--text-dim); border-color:var(--line); }
   .btn.ghost:hover{ color:var(--text); border-color:var(--text-dim); }
   .btn.danger{ color:var(--red); border-color:#5c1f27; }
+
+  .skip-link{
+    position:fixed; bottom:1.4rem; right:1.6rem; font-family:'JetBrains Mono'; font-size:.7rem;
+    color:var(--text-dim); border:1px solid var(--line); padding:.4rem .8rem; cursor:pointer; letter-spacing:.1em; opacity:.6;
+  }
+  .skip-link:hover{ opacity:1; color:var(--cyan); border-color:var(--cyan-dim); }
+
+  .debug-log{
+    margin-top:1rem; width:min(58vw,420px); max-height:150px; overflow-y:auto;
+    background:#01050a; border:1px solid var(--line); padding:.5rem .6rem;
+    font-size:.63rem; line-height:1.55; color:var(--cyan-dim); text-align:left;
+  }
+  .debug-log div{ white-space:pre-wrap; word-break:break-word; }
+  .debug-log .err{ color:var(--red); }
 
   /* ---------- DASHBOARD ---------- */
   #dash{ flex-direction:column; justify-content:flex-start; align-items:stretch; padding:1.6rem 2.2rem; }
@@ -157,7 +164,6 @@
   }
   .panel h3{ font-size:.8rem; letter-spacing:.2em; color:var(--text-dim); font-weight:600; margin-bottom:.7rem; }
 
-  /* status gauge — square/bracket, no circles */
   .ring-panel{ display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; }
   .gauge{ position:relative; width:170px; height:170px; border:1.5px solid var(--line); }
   .gauge::before, .gauge::after,
@@ -205,7 +211,6 @@
   }
   .ticker-bar .dot-live{ width:7px; height:7px; background:var(--green); display:inline-block; margin-right:.4rem; box-shadow:0 0 6px var(--green); }
 
-  /* ---------- PIN MODAL ---------- */
   #pinModal{
     position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
     background:rgba(2,6,12,.85); backdrop-filter:blur(3px);
@@ -227,7 +232,6 @@
     border:1px solid var(--line); padding:.7rem 0; text-align:center; cursor:pointer; transition:.15s;
   }
   .pin-key:hover{ border-color:var(--cyan); color:var(--cyan); }
-  .pin-key.wide{ grid-column:span 1; }
   .pin-error{ color:var(--red); font-size:.72rem; text-align:center; margin-top:.7rem; letter-spacing:.1em; min-height:1rem; }
   .pin-cancel{ margin-top:.9rem; width:100%; }
 
@@ -236,7 +240,6 @@
 </head>
 <body>
 
-<!-- BOOT -->
 <div class="screen active" id="boot">
   <div class="boot-logo">AEGIS</div>
   <div class="boot-sub">BIOMETRIC ACCESS CONTROL PANEL</div>
@@ -244,7 +247,6 @@
   <div class="boot-bar-wrap"><div class="boot-bar" id="bootBar"></div></div>
 </div>
 
-<!-- AUTH -->
 <div class="screen" id="auth">
   <div class="auth-title">IDENTITY VERIFICATION REQUIRED</div>
   <div class="scan-frame" id="scanFrame">
@@ -266,10 +268,11 @@
   </div>
   <div class="auth-status" id="authStatus">Initializing camera…</div>
   <div class="auth-actions" id="authActions"></div>
+  <div class="debug-log" id="debugLog"></div>
+  <div class="skip-link" id="pinLoginLink" style="right:auto; left:1.6rem;">PIN LOGIN</div>
   <div class="skip-link" id="skipLink">SKIP → DEMO MODE</div>
 </div>
 
-<!-- DASHBOARD -->
 <div class="screen" id="dash">
   <div class="topbar">
     <div class="brand">AEGIS <span>CONTROL PANEL // OPERATOR VERIFIED</span></div>
@@ -351,11 +354,10 @@ function goFullscreen(){
   const el = document.documentElement;
   const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
   if(req && !document.fullscreenElement){
-    req.call(el).catch(()=>{ /* blocked without a user gesture — fallback listener below handles it */ });
+    req.call(el).catch(()=>{});
   }
 }
 goFullscreen();
-// Most mobile browsers require a user gesture — grab the very first tap/click as a fallback.
 document.addEventListener('click', function firstTapFullscreen(){
   goFullscreen();
   document.removeEventListener('click', firstTapFullscreen);
@@ -363,9 +365,17 @@ document.addEventListener('click', function firstTapFullscreen(){
 
 /* ============ UTILITIES ============ */
 const $ = id => document.getElementById(id);
-function showScreen(id){
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  $(id).classList.add('active');
+function dlog(msg, isErr){
+  const el = document.getElementById('debugLog');
+  if(el){
+    const t = new Date().toLocaleTimeString('en-US',{hour12:false}) + '.' + String(Date.now()%1000).padStart(3,'0');
+    const line = document.createElement('div');
+    if(isErr) line.className = 'err';
+    line.textContent = `[${t}] ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+  (isErr ? console.error : console.log)('AEGIS:', msg);
 }
 function logLine(container, text, cls){
   const d = document.createElement('div');
@@ -387,7 +397,6 @@ const bootMessages = [
   const interval = setInterval(()=>{
     if(i >= bootMessages.length){ clearInterval(interval); return; }
     const d = document.createElement('div');
-    d.style.animationDelay = '0s';
     d.innerHTML = `&gt; ${bootMessages[i]} ... <span class="ok">OK</span>`;
     log.appendChild(d);
     i++;
@@ -395,6 +404,11 @@ const bootMessages = [
   requestAnimationFrame(()=>{ $('bootBar').style.width = '100%'; });
   setTimeout(()=>{ showScreen('auth'); initAuth(); }, 2700);
 })();
+
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  $(id).classList.add('active');
+}
 
 /* ============ PIN GATE ============ */
 const RE_ENROLL_PIN = '2402';
@@ -413,14 +427,12 @@ function buildPinKeypad(){
     wrap.appendChild(btn);
   });
 }
-
 function renderPinDots(){
   const dots = $('pinDots').children;
   for(let i=0;i<dots.length;i++){
     dots[i].classList.toggle('filled', i < pinEntry.length);
   }
 }
-
 function handlePinKey(k){
   if(k === 'CLR'){ pinEntry = ''; $('pinError').textContent=''; renderPinDots(); return; }
   if(k === 'DEL'){ pinEntry = pinEntry.slice(0,-1); $('pinError').textContent=''; renderPinDots(); return; }
@@ -438,7 +450,6 @@ function handlePinKey(k){
     }
   }
 }
-
 function requirePinThen(callback){
   pinEntry = '';
   pinResolveCallback = callback;
@@ -447,19 +458,24 @@ function requirePinThen(callback){
   renderPinDots();
   $('pinModal').classList.add('active');
 }
-
 function closePinModal(){
   $('pinModal').classList.remove('active');
   pinEntry = '';
   pinResolveCallback = null;
 }
-
 $('pinCancel').onclick = closePinModal;
 $('skipLink').onclick = ()=>{ scanning = false; if(stream) stream.getTracks().forEach(t=>t.stop()); unlockDashboard(); };
+$('pinLoginLink').onclick = ()=>{
+  requirePinThen(()=>{
+    scanning = false;
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    unlockDashboard();
+  });
+};
 
 /* ============ FACE AUTH ============ */
 const STORAGE_KEY = 'aegis:face-descriptor';
-const MATCH_THRESHOLD = 1.4; // euclidean distance over the geometric fingerprint — tune per device, see console log
+const MATCH_THRESHOLD = 1.4;
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 
 let modelsReady = false;
@@ -468,36 +484,35 @@ let enrolledDescriptor = null;
 let consecutiveMatches = 0;
 let consecutiveMisses = 0;
 let scanning = false;
-
 let cpuBackendForced = false;
+
 async function tryForceCpuBackend(){
+  dlog('attempting to force cpu backend...');
   try{
     const tf = faceapi.tf || window.tf;
     if(tf && tf.setBackend){
       await tf.setBackend('cpu');
       await tf.ready();
       cpuBackendForced = true;
-      console.info('AEGIS: forced tfjs CPU backend (avoids WebGL hangs on some mobile GPUs)');
+      dlog('cpu backend forced, tf.getBackend() = ' + tf.getBackend());
+    } else {
+      dlog('tf.setBackend not available on this build', true);
     }
   }catch(e){
-    console.warn('AEGIS: could not force cpu backend', e);
+    dlog('tryForceCpuBackend error: ' + e.message, true);
   }
 }
 
 async function loadModels(){
   await tryForceCpuBackend();
-  // Lightweight mode: detector + landmarks only. We skip faceRecognitionNet
-  // (the ~6.2MB deep embedding model) entirely and match on face geometry
-  // instead — far less compute, at the cost of being a looser match.
-  await Promise.all([
-    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-    faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL)
-  ]);
+  dlog('loading tinyFaceDetector...');
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  dlog('tinyFaceDetector loaded');
+  dlog('loading faceLandmark68TinyNet...');
+  await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+  dlog('faceLandmark68TinyNet loaded');
 }
 
-// Build a normalized "shape fingerprint" from 68 landmarks: every point
-// expressed relative to the eye-center midpoint and scaled by inter-ocular
-// distance, so it's robust to the face being closer/farther/slightly rotated.
 function computeGeoDescriptor(landmarks){
   const pts = landmarks.positions;
   const avg = (arr) => arr.reduce((a,p)=>({x:a.x+p.x/arr.length, y:a.y+p.y/arr.length}), {x:0,y:0});
@@ -523,7 +538,6 @@ async function loadStoredDescriptor(){
   }catch(e){ /* no key yet */ }
   return null;
 }
-
 async function saveDescriptor(desc){
   await window.storage.set(STORAGE_KEY, JSON.stringify(Array.from(desc)));
 }
@@ -541,9 +555,10 @@ function setAuthActions(buttons){
 }
 
 async function initAuth(){
+  dlog('initAuth() started');
   $('authStatus').textContent = 'Loading recognition model…';
   if(typeof faceapi === 'undefined'){
-    console.error('AEGIS: face-api.js library script did not load.');
+    dlog('faceapi library not defined — script failed to load', true);
     $('authStatus').textContent = 'Face recognition library failed to load (check network/CDN)';
     setAuthActions([{label:'RETRY', onClick: initAuth}, {label:'ENTER DEMO MODE', cls:'ghost', onClick: ()=>unlockDashboard()}]);
     return;
@@ -552,19 +567,23 @@ async function initAuth(){
     await loadModels();
     modelsReady = true;
   }catch(e){
-    console.error('AEGIS model load error:', e);
+    dlog('loadModels() threw: ' + e.message, true);
     $('authStatus').textContent = 'Model load failed: ' + (e && e.message ? e.message : 'unknown error');
     setAuthActions([{label:'RETRY', onClick: initAuth}, {label:'ENTER DEMO MODE', cls:'ghost', onClick: ()=>unlockDashboard()}]);
     return;
   }
-  console.info('AEGIS: backend =', cpuBackendForced ? 'cpu (forced)' : 'webgl (default)');
+  dlog('backend = ' + (cpuBackendForced ? 'cpu (forced)' : 'webgl (default)'));
 
   enrolledDescriptor = await loadStoredDescriptor();
+  dlog(enrolledDescriptor ? 'found stored face descriptor' : 'no stored face descriptor');
 
   try{
+    dlog('requesting camera...');
     stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:320, height:320 } });
     $('video').srcObject = stream;
+    dlog('camera stream acquired, ' + stream.getVideoTracks().length + ' video track(s)');
   }catch(e){
+    dlog('getUserMedia failed: ' + e.message, true);
     $('authStatus').textContent = 'Camera unavailable — check permissions';
     setAuthActions([{label:'RETRY', onClick: initAuth}, {label:'SKIP TO DEMO', cls:'ghost', onClick: ()=>unlockDashboard()}]);
     return;
@@ -573,6 +592,7 @@ async function initAuth(){
   $('video').addEventListener('loadedmetadata', ()=>{
     const video = $('video'), canvas = $('overlay');
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    dlog(`video ready: ${video.videoWidth}x${video.videoHeight}`);
 
     if(enrolledDescriptor){
       $('authStatus').textContent = 'Look into the camera to authenticate';
@@ -601,9 +621,6 @@ async function startEnrollment(){
   $('stateVal').textContent = 'ENROLLING';
   const video = $('video');
 
-  // One full descriptor capture per pose instead of several — the descriptor
-  // computation is the heaviest op in the whole pipeline, and doing it 15x
-  // back-to-back is what freezes weaker tablet GPUs. 5 poses is plenty.
   const posePlan = [
     'Look straight ahead',
     'Turn your head LEFT',
@@ -617,19 +634,28 @@ async function startEnrollment(){
     const label = posePlan[p];
     $('authStatus').textContent = `${label} — get ready (${p+1}/${posePlan.length})`;
     $('confVal').textContent = `${Math.round(p/posePlan.length*100)}%`;
-    await new Promise(r=>setTimeout(r, 900)); // time to move into position
+    await new Promise(r=>setTimeout(r, 900));
 
     $('authStatus').textContent = `${label} — hold still…`;
 
     let captured = false;
     for(let attempt=0; attempt<3 && !captured; attempt++){
+      const t0 = performance.now();
+      dlog(`pose "${label}" attempt ${attempt+1}: detection starting...`);
       try{
         const det = await detectWithTimeout(video, 6000);
-        if(det){ samples.push(computeGeoDescriptor(det.landmarks)); captured = true; }
+        const ms = Math.round(performance.now()-t0);
+        if(det){
+          samples.push(computeGeoDescriptor(det.landmarks));
+          captured = true;
+          dlog(`pose "${label}" attempt ${attempt+1}: SUCCESS in ${ms}ms`);
+        } else {
+          dlog(`pose "${label}" attempt ${attempt+1}: no face found (${ms}ms)`, true);
+        }
       }catch(e){
-        console.warn('AEGIS enrollment attempt failed:', e.message);
+        const ms = Math.round(performance.now()-t0);
+        dlog(`pose "${label}" attempt ${attempt+1}: FAILED after ${ms}ms — ${e.message}`, true);
       }
-      // yield a beat so the UI can repaint / timers can catch up before retrying
       await new Promise(r=>setTimeout(r, 150));
     }
     if(!captured){
@@ -667,9 +693,7 @@ async function recognitionLoop(){
   let det = null;
   try{
     det = await detectWithTimeout(video, 3500);
-  }catch(e){
-    // timeout or detection error — just skip this frame
-  }
+  }catch(e){ /* skip frame */ }
 
   if(det && enrolledDescriptor){
     const liveDesc = computeGeoDescriptor(det.landmarks);
@@ -731,7 +755,6 @@ function unlockDashboard(){
 /* ============ DASHBOARD ============ */
 let dashStart = Date.now();
 function initDashboard(){
-  // clock
   function tick(){
     const now = new Date();
     $('clockTime').textContent = now.toLocaleTimeString('en-US',{hour12:false});
@@ -744,7 +767,6 @@ function initDashboard(){
   }
   tick(); setInterval(tick, 1000);
 
-  // system integrity gauge (square fill, no circles)
   let pct = 0;
   const fill = $('gaugeFill');
   const target = 87 + Math.floor(Math.random()*10);
@@ -755,7 +777,6 @@ function initDashboard(){
     if(pct >= target) clearInterval(gaugeAnim);
   }, 30);
 
-  // simulated environment metrics
   $('mTemp').textContent = (21 + Math.random()*2).toFixed(1) + '°C';
   $('mHum').textContent = Math.round(38 + Math.random()*10) + '%';
   $('mLight').textContent = Math.round(400 + Math.random()*250) + ' LUX';
@@ -766,7 +787,6 @@ function initDashboard(){
   }
   $('mLatency').textContent = Math.round(10+Math.random()*25) + ' MS';
 
-  // toggles
   const toggles = [
     {label:'CABIN LIGHTING', on:true},
     {label:'DO NOT DISTURB', on:false},
@@ -789,7 +809,6 @@ function initDashboard(){
     tWrap.appendChild(row);
   });
 
-  // nav modules
   const modules = ['CAMERAS','CLIMATE','ACCESS LOG','DIAGNOSTICS','NETWORK','SETTINGS'];
   const navGrid = $('navGrid');
   navGrid.innerHTML = '';
@@ -801,14 +820,12 @@ function initDashboard(){
     navGrid.appendChild(tile);
   });
 
-  // initial log
   const dashLog = $('dashLog');
   dashLog.innerHTML = '';
   logLine(dashLog, ' OPERATOR VERIFIED — SESSION START');
   logLine(dashLog, ' SYSTEM INTEGRITY CHECK PASSED');
   logLine(dashLog, ' ALL SUBSYSTEMS NOMINAL');
 
-  // lock button
   $('lockBtn').onclick = ()=>{
     showScreen('auth');
     $('scanFrame').classList.remove('locked','denied');
