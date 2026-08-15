@@ -247,7 +247,7 @@
 <!-- BOOT -->
 <div class="screen active" id="boot">
   <div class="boot-logo">AEGIS</div>
-  <div class="boot-sub">AK'S BIOMETRIC ACCESS CONTROL PANEL</div>
+  <div class="boot-sub">BIOMETRIC ACCESS CONTROL PANEL</div>
   <div class="boot-log" id="bootLog"></div>
   <div class="boot-bar-wrap"><div class="boot-bar" id="bootBar"></div></div>
 </div>
@@ -274,7 +274,6 @@
   </div>
   <div class="auth-status" id="authStatus">Initializing camera…</div>
   <div class="auth-actions" id="authActions"></div>
-  <div class="debug-log" id="debugLog"></div>
   <div class="skip-link" id="pinLoginLink" style="right:auto; left:1.6rem;">PIN LOGIN</div>
   <div class="skip-link" id="skipLink">SKIP → DEMO MODE</div>
 </div>
@@ -734,13 +733,10 @@ async function recognitionLoop(){
     $('confVal').textContent = `${conf.toFixed(1)}%`;
 
     if(dist < MATCH_THRESHOLD){
-      consecutiveMatches++; consecutiveMisses = 0;
       $('authStatus').className = 'auth-status';
-      $('authStatus').textContent = `Match confirmed (${consecutiveMatches}/5)`;
-      if(consecutiveMatches >= 5){
-        scanning = false;
-        return grantAccess();
-      }
+      $('authStatus').textContent = 'Match confirmed';
+      scanning = false;
+      return grantAccess();
     } else {
       consecutiveMisses++; consecutiveMatches = 0;
       $('authStatus').textContent = 'Face detected — not recognized';
