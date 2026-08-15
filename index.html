@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
   :root{
     --bg-0:#040810;
@@ -239,6 +240,29 @@
   .pin-error{ color:var(--red); font-size:.72rem; text-align:center; margin-top:.7rem; letter-spacing:.1em; min-height:1rem; }
   .pin-cancel{ margin-top:.9rem; width:100%; }
 
+  /* ---------- CAMERA MODULE ---------- */
+  #cameraModal{
+    position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
+    background:rgba(2,6,12,.9); backdrop-filter:blur(3px);
+  }
+  #cameraModal.active{ display:flex; }
+  .cam-box{ width:min(70vw, 640px); position:relative; }
+  .cam-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:.7rem; }
+  .cam-title{ font-family:'Rajdhani'; letter-spacing:.2em; font-size:.9rem; color:var(--text-dim); }
+  .cam-title span{ color:var(--green); }
+  .cam-close{
+    font-family:'JetBrains Mono'; font-size:.7rem; color:var(--text-dim); border:1px solid var(--line);
+    padding:.35rem .7rem; cursor:pointer; letter-spacing:.1em;
+  }
+  .cam-close:hover{ color:var(--red); border-color:#5c1f27; }
+  .cam-frame{
+    position:relative; width:100%; aspect-ratio:16/9; background:#010305; border:1px solid var(--line); overflow:hidden;
+  }
+  .cam-frame video{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .cam-frame .corner{ width:26px; height:26px; border-width:2px; }
+  .cam-status{ margin-top:.6rem; font-size:.72rem; color:var(--text-dim); display:flex; justify-content:space-between; letter-spacing:.08em; }
+  .cam-status .live{ color:var(--green); }
+
   ::-webkit-scrollbar{ display:none; }
 </style>
 </head>
@@ -352,6 +376,35 @@
     <div class="pin-error" id="pinError"></div>
     <button class="btn ghost pin-cancel" id="pinCancel">CANCEL</button>
   </div>
+</div>
+
+<div id="cameraModal">
+  <div class="cam-box">
+    <div class="cam-header">
+      <div class="cam-title">LAPTOP CAM // <span id="camStateLabel">CONNECTING</span></div>
+      <div class="cam-close" id="camClose">✕ CLOSE</div>
+    </div>
+    <div class="cam-frame" id="camFrame">
+      <video id="camVideo" autoplay muted playsinline></video>
+      <div class="corner tl"></div><div class="corner tr"></div>
+      <div class="corner bl"></div><div class="corner br"></div>
+    </div>
+    <div class="cam-status">
+      <span><span class="live" id="camLiveDot">●</span> <span id="camStatusText">Requesting camera access…</span></span>
+      <span id="camResolution">—</span>
+    </div>
+  </div>
+</div>
+
+<!-- Shown only when opened as ?broadcast=1 on the laptop -->
+<div id="broadcastScreen" class="screen">
+  <div class="auth-title">BROADCASTING TO AEGIS PANEL</div>
+  <div class="scan-frame" id="broadcastFrame">
+    <video id="broadcastVideo" autoplay muted playsinline style="transform:none;"></video>
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="corner bl"></div><div class="corner br"></div>
+  </div>
+  <div class="auth-status" id="broadcastStatus">Starting camera…</div>
 </div>
 
 <script>
@@ -780,6 +833,112 @@ function unlockDashboard(){
 }
 
 /* ============ DASHBOARD ============ */
+/* ============ REMOTE LAPTOP CAMERA (WebRTC via PeerJS) ============ */
+// Pick your own unique ID here so nobody else on PeerJS's public broker collides with it.
+// Use the SAME value in both places it appears in this file.
+const REMOTE_PEER_ID = 'aegis-laptop-akshat-9214';
+
+let viewerPeer = null;
+let viewerCall = null;
+
+async function openCameraModule(){
+  $('cameraModal').classList.add('active');
+  $('camStateLabel').textContent = 'CONNECTING';
+  $('camStatusText').textContent = 'Connecting to laptop feed…';
+  $('camResolution').textContent = '—';
+
+  if(typeof Peer === 'undefined'){
+    $('camStateLabel').textContent = 'ERROR';
+    $('camStatusText').textContent = 'PeerJS library failed to load — check network';
+    return;
+  }
+
+  viewerPeer = new Peer();
+  viewerPeer.on('open', ()=>{
+    // an empty stream — we're not sending video, only receiving
+    const blankStream = new MediaStream();
+    viewerCall = viewerPeer.call(REMOTE_PEER_ID, blankStream);
+    if(!viewerCall){
+      $('camStateLabel').textContent = 'ERROR';
+      $('camStatusText').textContent = 'Could not start call';
+      return;
+    }
+    viewerCall.on('stream', remoteStream=>{
+      const video = $('camVideo');
+      video.srcObject = remoteStream;
+      $('camStateLabel').textContent = 'LIVE';
+      $('camStatusText').textContent = 'Feed active';
+      video.onloadedmetadata = ()=>{
+        $('camResolution').textContent = `${video.videoWidth}×${video.videoHeight}`;
+      };
+      logLine($('dashLog'), ' LAPTOP CAM — FEED ACTIVE');
+    });
+    viewerCall.on('close', ()=>{
+      $('camStateLabel').textContent = 'OFFLINE';
+      $('camStatusText').textContent = 'Laptop disconnected';
+    });
+    viewerCall.on('error', err=>{
+      $('camStateLabel').textContent = 'ERROR';
+      $('camStatusText').textContent = 'Call error: ' + err.message;
+    });
+  });
+  viewerPeer.on('error', err=>{
+    $('camStateLabel').textContent = 'ERROR';
+    if(err.type === 'peer-unavailable'){
+      $('camStatusText').textContent = 'Laptop is not broadcasting right now';
+    } else {
+      $('camStatusText').textContent = 'Connection error: ' + err.message;
+    }
+    logLine($('dashLog'), ' LAPTOP CAM — CONNECTION FAILED', 'err');
+  });
+}
+
+function closeCameraModule(){
+  if(viewerCall){ viewerCall.close(); viewerCall = null; }
+  if(viewerPeer){ viewerPeer.destroy(); viewerPeer = null; }
+  $('cameraModal').classList.remove('active');
+  logLine($('dashLog'), ' LAPTOP CAM CLOSED');
+}
+$('camClose').onclick = closeCameraModule;
+
+/* ============ BROADCAST MODE (run on the laptop) ============ */
+// Open this same page with ?broadcast=1 on the laptop to turn it into the source feed.
+(function checkBroadcastMode(){
+  const params = new URLSearchParams(window.location.search);
+  if(params.get('broadcast') !== '1') return;
+
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  $('broadcastScreen').classList.add('active');
+
+  if(typeof Peer === 'undefined'){
+    $('broadcastStatus').textContent = 'PeerJS library failed to load — check network';
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({ video:true })
+    .then(stream=>{
+      $('broadcastVideo').srcObject = stream;
+      $('broadcastStatus').textContent = 'Camera ready. Registering as broadcast source…';
+
+      const peer = new Peer(REMOTE_PEER_ID);
+      peer.on('open', id=>{
+        $('broadcastStatus').textContent = `Broadcasting as "${id}" — waiting for the tablet to connect…`;
+      });
+      peer.on('call', call=>{
+        call.answer(stream);
+        $('broadcastStatus').textContent = 'Tablet connected — streaming live.';
+        call.on('close', ()=>{ $('broadcastStatus').textContent = 'Tablet disconnected. Waiting…'; });
+      });
+      peer.on('error', err=>{
+        $('broadcastStatus').textContent = 'PeerJS error: ' + err.message +
+          (err.type === 'unavailable-id' ? ' (this laptop is already broadcasting in another tab)' : '');
+      });
+    })
+    .catch(e=>{
+      $('broadcastStatus').textContent = 'Camera access failed: ' + e.message;
+    });
+})();
+
 let dashStart = Date.now();
 function initDashboard(){
   // clock
@@ -848,7 +1007,10 @@ function initDashboard(){
     const tile = document.createElement('div');
     tile.className = 'nav-tile';
     tile.textContent = m;
-    tile.onclick = ()=> logLine($('dashLog'), ` MODULE OPENED: ${m}`);
+    tile.onclick = ()=>{
+      logLine($('dashLog'), ` MODULE OPENED: ${m}`);
+      if(m === 'CAMERAS') openCameraModule();
+    };
     navGrid.appendChild(tile);
   });
 
