@@ -450,12 +450,15 @@ function logLine(container, text, cls){
 }
 
 /* ============ BOOT SEQUENCE ============ */
+const IS_BROADCAST_MODE = new URLSearchParams(window.location.search).get('broadcast') === '1';
+
 const bootMessages = [
   'LOADING KERNEL MODULES', 'MOUNTING SENSOR ARRAY', 'CALIBRATING OPTICS',
   'LOADING FACE-RECOGNITION MODEL', 'INITIALIZING SECURE ENCLAVE',
   'ESTABLISHING SESSION TOKEN', 'AEGIS CORE READY'
 ];
 (function boot(){
+  if(IS_BROADCAST_MODE) return; // laptop broadcast page skips the normal boot/auth flow entirely
   const log = $('bootLog');
   let i = 0;
   const interval = setInterval(()=>{
@@ -904,8 +907,7 @@ $('camClose').onclick = closeCameraModule;
 /* ============ BROADCAST MODE (run on the laptop) ============ */
 // Open this same page with ?broadcast=1 on the laptop to turn it into the source feed.
 (function checkBroadcastMode(){
-  const params = new URLSearchParams(window.location.search);
-  if(params.get('broadcast') !== '1') return;
+  if(!IS_BROADCAST_MODE) return;
 
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   $('broadcastScreen').classList.add('active');
