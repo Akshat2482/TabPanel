@@ -78,6 +78,14 @@
     filter:saturate(1.15) contrast(1.05) brightness(.95);
     opacity:.9;
   }
+  /* Broadcast preview: show the full uncropped frame (not filled/cover) and
+     scale it down a bit further for a wider, more "zoomed out" view — the
+     frame box itself stays the same size, just what's visible inside it. */
+  #broadcastVideo{
+    object-fit:contain !important;
+    transform:scale(0.82) !important;
+    background:#000;
+  }
   .scan-frame canvas{ position:absolute; inset:0; width:100%; height:100%; }
   .corner{ position:absolute; width:34px; height:34px; border:2.5px solid var(--cyan); filter:drop-shadow(0 0 6px var(--cyan)); z-index:5; }
   .corner.tl{ top:-2px; left:-2px; border-right:none; border-bottom:none; }
@@ -400,7 +408,7 @@
 <div id="broadcastScreen" class="screen">
   <div class="auth-title">BROADCASTING TO AEGIS PANEL</div>
   <div class="scan-frame" id="broadcastFrame">
-    <video id="broadcastVideo" autoplay muted playsinline style="transform:none;"></video>
+    <video id="broadcastVideo" autoplay muted playsinline></video>
     <div class="corner tl"></div><div class="corner tr"></div>
     <div class="corner bl"></div><div class="corner br"></div>
   </div>
