@@ -859,18 +859,14 @@ async function openCameraModule(){
   }
 
   viewerPeer = new Peer();
-  viewerPeer.on('open', myId=>{
-    console.log('AEGIS CAM: viewer peer opened, my id =', myId, '— calling', REMOTE_PEER_ID);
-    // an empty stream — we're not sending video, only receiving
-    const blankStream = new MediaStream();
-    viewerCall = viewerPeer.call(REMOTE_PEER_ID, blankStream);
-    if(!viewerCall){
-      console.error('AEGIS CAM: peer.call() returned falsy — call could not start');
-      $('camStateLabel').textContent = 'ERROR';
-      $('camStatusText').textContent = 'Could not start call';
-      return;
-    }
-    viewerCall.on('stream', remoteStream=>{
+
+  // The laptop initiates the actual video call once it sees us connect —
+  // we just wait for it here and answer with no outgoing media (receive-only).
+  viewerPeer.on('call', call=>{
+    console.log('AEGIS CAM: incoming call from broadcaster, answering (receive-only)');
+    viewerCall = call;
+    call.answer();
+    call.on('stream', remoteStream=>{
       console.log('AEGIS CAM: received remote stream, tracks =', remoteStream.getTracks().length);
       const video = $('camVideo');
       video.srcObject = remoteStream;
@@ -881,17 +877,27 @@ async function openCameraModule(){
       };
       logLine($('dashLog'), ' LAPTOP CAM — FEED ACTIVE');
     });
-    viewerCall.on('close', ()=>{
+    call.on('close', ()=>{
       console.log('AEGIS CAM: call closed');
       $('camStateLabel').textContent = 'OFFLINE';
       $('camStatusText').textContent = 'Laptop disconnected';
     });
-    viewerCall.on('error', err=>{
+    call.on('error', err=>{
       console.error('AEGIS CAM: call error', err);
       $('camStateLabel').textContent = 'ERROR';
       $('camStatusText').textContent = 'Call error: ' + err.message;
     });
   });
+
+  viewerPeer.on('open', myId=>{
+    console.log('AEGIS CAM: viewer peer opened, my id =', myId, '— requesting connection from', REMOTE_PEER_ID);
+    // A lightweight data connection just to notify the broadcaster we're here —
+    // it responds by calling US with its real video stream.
+    const conn = viewerPeer.connect(REMOTE_PEER_ID);
+    conn.on('open', ()=> console.log('AEGIS CAM: data connection open, waiting for incoming call...'));
+    conn.on('error', err=> console.error('AEGIS CAM: data connection error', err));
+  });
+
   viewerPeer.on('error', err=>{
     console.error('AEGIS CAM: peer error', err.type, err);
     $('camStateLabel').textContent = 'ERROR';
@@ -938,11 +944,12 @@ $('camClose').onclick = closeCameraModule;
         console.log('AEGIS BROADCAST: peer open, registered as', id);
         $('broadcastStatus').textContent = `Broadcasting as "${id}" — waiting for the tablet to connect…`;
       });
-      peer.on('call', call=>{
-        console.log('AEGIS BROADCAST: incoming call from', call.peer, '— answering with stream');
-        call.answer(stream);
+      peer.on('connection', conn=>{
+        console.log('AEGIS BROADCAST: viewer connected (', conn.peer, ') — calling them with our stream');
+        const call = peer.call(conn.peer, stream);
         $('broadcastStatus').textContent = 'Tablet connected — streaming live.';
         call.on('close', ()=>{ console.log('AEGIS BROADCAST: call closed'); $('broadcastStatus').textContent = 'Tablet disconnected. Waiting…'; });
+        call.on('error', err=>{ console.error('AEGIS BROADCAST: call error', err); });
       });
       peer.on('error', err=>{
         console.error('AEGIS BROADCAST: peer error', err.type, err);
