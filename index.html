@@ -235,18 +235,32 @@
   .pin-box::before{ top:-2px; left:-2px; border-right:none; border-bottom:none; }
   .pin-box::after{ bottom:-2px; right:-2px; border-left:none; border-top:none; }
   .pin-title{ font-family:'Rajdhani'; letter-spacing:.2em; font-size:.9rem; color:var(--text-dim); text-align:center; margin-bottom:.9rem; }
-  .pin-dots{ display:flex; justify-content:center; gap:.6rem; margin-bottom:1.1rem; }
-  .pin-dots span{ width:12px; height:12px; border:1.5px solid var(--cyan-dim); }
-  .pin-dots span.filled{ background:var(--cyan); border-color:var(--cyan); box-shadow:0 0 8px var(--cyan); }
-  .pin-keys{ display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
-  .pin-key{
-    font-family:'JetBrains Mono'; font-size:1.1rem; color:var(--text); background:var(--bg-1);
-    border:1px solid var(--line); padding:.7rem 0; text-align:center; cursor:pointer; transition:.15s;
-  }
-  .pin-key:hover{ border-color:var(--cyan); color:var(--cyan); }
-  .pin-key.wide{ grid-column:span 1; }
   .pin-error{ color:var(--red); font-size:.72rem; text-align:center; margin-top:.7rem; letter-spacing:.1em; min-height:1rem; }
   .pin-cancel{ margin-top:.9rem; width:100%; }
+
+  /* ---------- RADIAL PATTERN LOCK ---------- */
+  .pattern-box{ width:440px; }
+  .pattern-wrap{
+    position:relative; width:380px; height:380px; margin:0 auto; touch-action:none;
+  }
+  .pattern-ring{
+    position:absolute; inset:8px; border:1.5px dashed var(--cyan-dim); border-radius:50%;
+    animation:patternRingSpin 22s linear infinite;
+  }
+  .pattern-ring.inner{ inset:46px; border-style:dotted; animation-duration:16s; animation-direction:reverse; }
+  @keyframes patternRingSpin{ to{ transform:rotate(360deg); } }
+  .pattern-wrap svg{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .pattern-line{ stroke:var(--cyan); stroke-width:2.5; filter:drop-shadow(0 0 5px var(--cyan)); fill:none; }
+  .pattern-node{
+    position:absolute; width:40px; height:40px; margin-left:-20px; margin-top:-20px;
+    border-radius:50%; border:1.5px solid var(--cyan-dim); background:var(--bg-1);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'JetBrains Mono'; font-size:.85rem; color:var(--text-dim);
+    user-select:none; transition:.15s;
+  }
+  .pattern-node.active{
+    border-color:var(--cyan); color:var(--cyan); background:rgba(75,238,255,.15); box-shadow:0 0 10px var(--cyan);
+  }
 
   /* ---------- CAMERA MODULE ---------- */
   #cameraModal{
@@ -270,6 +284,20 @@
   .cam-frame .corner{ width:26px; height:26px; border-width:2px; }
   .cam-status{ margin-top:.6rem; font-size:.72rem; color:var(--text-dim); display:flex; justify-content:space-between; letter-spacing:.08em; }
   .cam-status .live{ color:var(--green); }
+
+  /* ---------- CLIMATE MODULE ---------- */
+  #climateModal{
+    position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
+    background:rgba(2,6,12,.9); backdrop-filter:blur(3px);
+  }
+  #climateModal.active{ display:flex; }
+  .clim-body{ border:1px solid var(--line); background:#010305; padding:1.6rem 1.4rem; text-align:center; }
+  .clim-temp{ font-family:'Rajdhani'; font-size:3rem; font-weight:700; color:var(--cyan); text-shadow:0 0 14px rgba(75,238,255,.4); }
+  .clim-desc{ color:var(--text-dim); font-size:.82rem; margin-top:.2rem; letter-spacing:.05em; }
+  .clim-grid{ display:grid; grid-template-columns:1fr 1fr; gap:.6rem; margin-top:1.3rem; text-align:left; }
+  .clim-stat{ display:flex; justify-content:space-between; font-size:.75rem; border-bottom:1px solid var(--line); padding-bottom:.4rem; }
+  .clim-stat .m-label{ color:var(--text-dim); }
+  .clim-stat .m-val{ color:var(--text); }
 
   ::-webkit-scrollbar{ display:none; }
 </style>
@@ -375,12 +403,14 @@
 <div class="crt-overlay"></div>
 
 <div id="pinModal">
-  <div class="pin-box">
-    <div class="pin-title">ENTER SECURITY PIN</div>
-    <div class="pin-dots" id="pinDots">
-      <span></span><span></span><span></span><span></span>
+  <div class="pin-box pattern-box">
+    <div class="pin-title">TRACE ACCESS PATTERN</div>
+    <div class="pattern-wrap" id="patternWrap">
+      <div class="pattern-ring"></div>
+      <div class="pattern-ring inner"></div>
+      <svg id="patternSvg" viewBox="0 0 380 380"></svg>
+      <div id="patternNodes"></div>
     </div>
-    <div class="pin-keys" id="pinKeys"></div>
     <div class="pin-error" id="pinError"></div>
     <button class="btn ghost pin-cancel" id="pinCancel">CANCEL</button>
   </div>
@@ -400,6 +430,25 @@
     <div class="cam-status">
       <span><span class="live" id="camLiveDot">●</span> <span id="camStatusText">Requesting camera access…</span></span>
       <span id="camResolution">—</span>
+    </div>
+  </div>
+</div>
+
+<div id="climateModal">
+  <div class="cam-box">
+    <div class="cam-header">
+      <div class="cam-title">CLIMATE MODULE // <span id="climStateLabel">LOCATING</span></div>
+      <div class="cam-close" id="climClose">✕ CLOSE</div>
+    </div>
+    <div class="clim-body">
+      <div class="clim-temp" id="climTemp">--°</div>
+      <div class="clim-desc" id="climDesc">Fetching local conditions…</div>
+      <div class="clim-grid">
+        <div class="clim-stat"><span class="m-label">FEELS LIKE</span><span class="m-val" id="climFeels">—</span></div>
+        <div class="clim-stat"><span class="m-label">WIND</span><span class="m-val" id="climWind">—</span></div>
+        <div class="clim-stat"><span class="m-label">HUMIDITY</span><span class="m-val" id="climHum">—</span></div>
+        <div class="clim-stat"><span class="m-label">LOCATION</span><span class="m-val" id="climLoc">—</span></div>
+      </div>
     </div>
   </div>
 </div>
@@ -481,61 +530,138 @@ const bootMessages = [
   setTimeout(()=>{ showScreen('auth'); initAuth(); }, 2700);
 })();
 
-/* ============ PIN GATE ============ */
+/* ============ RADIAL PATTERN LOCK ============ */
+// The "PIN" 2402 is now traced as a path across 10 radially-arranged nodes
+// (digits 0–9) instead of typed — connect node 2 → 4 → 0 → 2 by dragging.
 const RE_ENROLL_PIN = '2402';
-let pinEntry = '';
 let pinResolveCallback = null;
 
-function buildPinKeypad(){
-  const wrap = $('pinKeys');
-  wrap.innerHTML = '';
-  const keys = ['1','2','3','4','5','6','7','8','9','CLR','0','DEL'];
-  keys.forEach(k=>{
-    const btn = document.createElement('div');
-    btn.className = 'pin-key';
-    btn.textContent = k;
-    btn.onclick = ()=> handlePinKey(k);
-    wrap.appendChild(btn);
-  });
+const PATTERN_CENTER = 190;
+const PATTERN_RADIUS = 145;
+let patternNodes = []; // {el, x, y}
+let patternSeq = [];
+let patternDragging = false;
+
+function patternNodePos(i){
+  const angle = (-90 + i*36) * Math.PI/180;
+  return { x: PATTERN_CENTER + PATTERN_RADIUS*Math.cos(angle), y: PATTERN_CENTER + PATTERN_RADIUS*Math.sin(angle) };
 }
 
-function renderPinDots(){
-  const dots = $('pinDots').children;
-  for(let i=0;i<dots.length;i++){
-    dots[i].classList.toggle('filled', i < pinEntry.length);
+function buildPatternNodes(){
+  const container = $('patternNodes');
+  container.innerHTML = '';
+  patternNodes = [];
+  for(let i=0;i<10;i++){
+    const pos = patternNodePos(i);
+    const el = document.createElement('div');
+    el.className = 'pattern-node';
+    el.textContent = i;
+    el.style.left = pos.x + 'px';
+    el.style.top = pos.y + 'px';
+    container.appendChild(el);
+    patternNodes.push({ el, x: pos.x, y: pos.y });
   }
 }
 
-function handlePinKey(k){
-  if(k === 'CLR'){ pinEntry = ''; $('pinError').textContent=''; renderPinDots(); return; }
-  if(k === 'DEL'){ pinEntry = pinEntry.slice(0,-1); $('pinError').textContent=''; renderPinDots(); return; }
-  if(pinEntry.length >= 4) return;
-  pinEntry += k;
-  renderPinDots();
-  if(pinEntry.length === 4){
-    if(pinEntry === RE_ENROLL_PIN){
-      const cb = pinResolveCallback;
-      closePinModal();
-      if(cb) cb();
-    } else {
-      $('pinError').textContent = 'INCORRECT PIN';
-      setTimeout(()=>{ pinEntry=''; renderPinDots(); }, 350);
-    }
+function makePatternLine(x1,y1,x2,y2){
+  const ln = document.createElementNS('http://www.w3.org/2000/svg','line');
+  ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
+  ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+  ln.setAttribute('class', 'pattern-line');
+  return ln;
+}
+
+function redrawPatternLines(livePos){
+  const svg = $('patternSvg');
+  svg.innerHTML = '';
+  const pts = patternSeq.map(i => patternNodes[i]);
+  for(let k=0; k<pts.length-1; k++){
+    svg.appendChild(makePatternLine(pts[k].x, pts[k].y, pts[k+1].x, pts[k+1].y));
+  }
+  if(livePos && pts.length){
+    const last = pts[pts.length-1];
+    svg.appendChild(makePatternLine(last.x, last.y, livePos.x, livePos.y));
   }
 }
+
+function getPatternRelativePos(evt){
+  const rect = $('patternWrap').getBoundingClientRect();
+  const scaleX = 380/rect.width, scaleY = 380/rect.height;
+  return { x: (evt.clientX-rect.left)*scaleX, y: (evt.clientY-rect.top)*scaleY };
+}
+
+function hitTestPatternNode(pos){
+  for(let i=0;i<patternNodes.length;i++){
+    if(Math.hypot(pos.x-patternNodes[i].x, pos.y-patternNodes[i].y) < 26) return i;
+  }
+  return -1;
+}
+
+function resetPattern(){
+  patternSeq = [];
+  patternDragging = false;
+  patternNodes.forEach(n=>n.el.classList.remove('active'));
+  $('patternSvg').innerHTML = '';
+}
+
+function onPatternDown(evt){
+  const pos = getPatternRelativePos(evt);
+  const idx = hitTestPatternNode(pos);
+  if(idx === -1) return;
+  evt.preventDefault();
+  patternDragging = true;
+  patternSeq = [idx];
+  patternNodes[idx].el.classList.add('active');
+  redrawPatternLines(pos);
+  document.addEventListener('pointermove', onPatternMove);
+  document.addEventListener('pointerup', onPatternUp);
+}
+
+function onPatternMove(evt){
+  if(!patternDragging) return;
+  const pos = getPatternRelativePos(evt);
+  const idx = hitTestPatternNode(pos);
+  if(idx !== -1 && patternSeq[patternSeq.length-1] !== idx){
+    patternSeq.push(idx);
+    patternNodes[idx].el.classList.add('active');
+  }
+  redrawPatternLines(pos);
+}
+
+function onPatternUp(){
+  document.removeEventListener('pointermove', onPatternMove);
+  document.removeEventListener('pointerup', onPatternUp);
+  patternDragging = false;
+  redrawPatternLines(null);
+  evaluatePattern();
+}
+
+function evaluatePattern(){
+  const target = RE_ENROLL_PIN.split('').map(Number);
+  const match = patternSeq.length === target.length && patternSeq.every((v,i)=>v===target[i]);
+  if(match){
+    const cb = pinResolveCallback;
+    closePinModal();
+    if(cb) cb();
+  } else {
+    $('pinError').textContent = 'PATTERN NOT RECOGNIZED';
+    setTimeout(resetPattern, 500);
+  }
+}
+
+$('patternWrap').addEventListener('pointerdown', onPatternDown);
 
 function requirePinThen(callback){
-  pinEntry = '';
   pinResolveCallback = callback;
   $('pinError').textContent = '';
-  buildPinKeypad();
-  renderPinDots();
+  buildPatternNodes();
+  resetPattern();
   $('pinModal').classList.add('active');
 }
 
 function closePinModal(){
   $('pinModal').classList.remove('active');
-  pinEntry = '';
+  resetPattern();
   pinResolveCallback = null;
 }
 
@@ -926,6 +1052,76 @@ function closeCameraModule(){
 }
 $('camClose').onclick = closeCameraModule;
 
+/* ============ CLIMATE MODULE (live weather, no API key needed) ============ */
+function weatherCodeText(code){
+  const map = {
+    0:'Clear sky', 1:'Mainly clear', 2:'Partly cloudy', 3:'Overcast',
+    45:'Fog', 48:'Depositing rime fog',
+    51:'Light drizzle', 53:'Moderate drizzle', 55:'Dense drizzle',
+    61:'Slight rain', 63:'Moderate rain', 65:'Heavy rain',
+    71:'Slight snow', 73:'Moderate snow', 75:'Heavy snow',
+    80:'Rain showers', 81:'Moderate rain showers', 82:'Violent rain showers',
+    95:'Thunderstorm', 96:'Thunderstorm w/ hail', 99:'Severe thunderstorm w/ hail'
+  };
+  return map[code] || 'Conditions unavailable';
+}
+
+function openClimateModule(){
+  $('climateModal').classList.add('active');
+  $('climStateLabel').textContent = 'LOCATING';
+  $('climTemp').textContent = '--°';
+  $('climDesc').textContent = 'Requesting location…';
+  ['climFeels','climWind','climHum','climLoc'].forEach(id=> $(id).textContent = '—');
+
+  if(!navigator.geolocation){
+    $('climStateLabel').textContent = 'ERROR';
+    $('climDesc').textContent = 'Geolocation not supported by this browser';
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    const { latitude, longitude } = pos.coords;
+    $('climStateLabel').textContent = 'FETCHING';
+    $('climDesc').textContent = 'Pulling local weather data…';
+    try{
+      const weatherRes = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+        `&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code` +
+        `&temperature_unit=fahrenheit&wind_speed_unit=mph`
+      );
+      const weather = await weatherRes.json();
+      const cur = weather.current;
+      $('climTemp').textContent = Math.round(cur.temperature_2m) + '°F';
+      $('climDesc').textContent = weatherCodeText(cur.weather_code);
+      $('climFeels').textContent = Math.round(cur.apparent_temperature) + '°F';
+      $('climWind').textContent = Math.round(cur.wind_speed_10m) + ' mph';
+      $('climHum').textContent = cur.relative_humidity_2m + '%';
+      $('climStateLabel').textContent = 'LIVE';
+      logLine($('dashLog'), ' CLIMATE MODULE — DATA RETRIEVED');
+
+      try{
+        const placeRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`);
+        const place = await placeRes.json();
+        $('climLoc').textContent = place.city || place.locality || place.principalSubdivision || `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
+      }catch(e){
+        $('climLoc').textContent = `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
+      }
+    }catch(e){
+      $('climStateLabel').textContent = 'ERROR';
+      $('climDesc').textContent = 'Weather fetch failed: ' + e.message;
+      logLine($('dashLog'), ' CLIMATE MODULE — FETCH FAILED', 'err');
+    }
+  }, err=>{
+    $('climStateLabel').textContent = 'ERROR';
+    $('climDesc').textContent = 'Location access denied: ' + err.message;
+  }, { enableHighAccuracy:false, timeout:10000 });
+}
+
+function closeClimateModule(){
+  $('climateModal').classList.remove('active');
+}
+$('climClose').onclick = closeClimateModule;
+
 /* ============ BROADCAST MODE (run on the laptop) ============ */
 // Open this same page with ?broadcast=1 on the laptop to turn it into the source feed.
 (function checkBroadcastMode(){
@@ -1042,6 +1238,7 @@ function initDashboard(){
     tile.onclick = ()=>{
       logLine($('dashLog'), ` MODULE OPENED: ${m}`);
       if(m === 'CAMERAS') openCameraModule();
+      if(m === 'CLIMATE') openClimateModule();
     };
     navGrid.appendChild(tile);
   });
