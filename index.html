@@ -845,28 +845,33 @@ let viewerPeer = null;
 let viewerCall = null;
 
 async function openCameraModule(){
+  console.log('AEGIS CAM: opening camera module, connecting to peer', REMOTE_PEER_ID);
   $('cameraModal').classList.add('active');
   $('camStateLabel').textContent = 'CONNECTING';
   $('camStatusText').textContent = 'Connecting to laptop feed…';
   $('camResolution').textContent = '—';
 
   if(typeof Peer === 'undefined'){
+    console.error('AEGIS CAM: Peer (PeerJS) is undefined — library failed to load');
     $('camStateLabel').textContent = 'ERROR';
     $('camStatusText').textContent = 'PeerJS library failed to load — check network';
     return;
   }
 
   viewerPeer = new Peer();
-  viewerPeer.on('open', ()=>{
+  viewerPeer.on('open', myId=>{
+    console.log('AEGIS CAM: viewer peer opened, my id =', myId, '— calling', REMOTE_PEER_ID);
     // an empty stream — we're not sending video, only receiving
     const blankStream = new MediaStream();
     viewerCall = viewerPeer.call(REMOTE_PEER_ID, blankStream);
     if(!viewerCall){
+      console.error('AEGIS CAM: peer.call() returned falsy — call could not start');
       $('camStateLabel').textContent = 'ERROR';
       $('camStatusText').textContent = 'Could not start call';
       return;
     }
     viewerCall.on('stream', remoteStream=>{
+      console.log('AEGIS CAM: received remote stream, tracks =', remoteStream.getTracks().length);
       const video = $('camVideo');
       video.srcObject = remoteStream;
       $('camStateLabel').textContent = 'LIVE';
@@ -877,15 +882,18 @@ async function openCameraModule(){
       logLine($('dashLog'), ' LAPTOP CAM — FEED ACTIVE');
     });
     viewerCall.on('close', ()=>{
+      console.log('AEGIS CAM: call closed');
       $('camStateLabel').textContent = 'OFFLINE';
       $('camStatusText').textContent = 'Laptop disconnected';
     });
     viewerCall.on('error', err=>{
+      console.error('AEGIS CAM: call error', err);
       $('camStateLabel').textContent = 'ERROR';
       $('camStatusText').textContent = 'Call error: ' + err.message;
     });
   });
   viewerPeer.on('error', err=>{
+    console.error('AEGIS CAM: peer error', err.type, err);
     $('camStateLabel').textContent = 'ERROR';
     if(err.type === 'peer-unavailable'){
       $('camStatusText').textContent = 'Laptop is not broadcasting right now';
@@ -908,35 +916,42 @@ $('camClose').onclick = closeCameraModule;
 // Open this same page with ?broadcast=1 on the laptop to turn it into the source feed.
 (function checkBroadcastMode(){
   if(!IS_BROADCAST_MODE) return;
+  console.log('AEGIS BROADCAST: broadcast mode active, peer id will be', REMOTE_PEER_ID);
 
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   $('broadcastScreen').classList.add('active');
 
   if(typeof Peer === 'undefined'){
+    console.error('AEGIS BROADCAST: Peer (PeerJS) is undefined — library failed to load');
     $('broadcastStatus').textContent = 'PeerJS library failed to load — check network';
     return;
   }
 
   navigator.mediaDevices.getUserMedia({ video:true })
     .then(stream=>{
+      console.log('AEGIS BROADCAST: camera acquired,', stream.getVideoTracks().length, 'track(s)');
       $('broadcastVideo').srcObject = stream;
       $('broadcastStatus').textContent = 'Camera ready. Registering as broadcast source…';
 
       const peer = new Peer(REMOTE_PEER_ID);
       peer.on('open', id=>{
+        console.log('AEGIS BROADCAST: peer open, registered as', id);
         $('broadcastStatus').textContent = `Broadcasting as "${id}" — waiting for the tablet to connect…`;
       });
       peer.on('call', call=>{
+        console.log('AEGIS BROADCAST: incoming call from', call.peer, '— answering with stream');
         call.answer(stream);
         $('broadcastStatus').textContent = 'Tablet connected — streaming live.';
-        call.on('close', ()=>{ $('broadcastStatus').textContent = 'Tablet disconnected. Waiting…'; });
+        call.on('close', ()=>{ console.log('AEGIS BROADCAST: call closed'); $('broadcastStatus').textContent = 'Tablet disconnected. Waiting…'; });
       });
       peer.on('error', err=>{
+        console.error('AEGIS BROADCAST: peer error', err.type, err);
         $('broadcastStatus').textContent = 'PeerJS error: ' + err.message +
           (err.type === 'unavailable-id' ? ' (this laptop is already broadcasting in another tab)' : '');
       });
     })
     .catch(e=>{
+      console.error('AEGIS BROADCAST: getUserMedia failed', e);
       $('broadcastStatus').textContent = 'Camera access failed: ' + e.message;
     });
 })();
