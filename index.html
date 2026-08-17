@@ -1311,11 +1311,15 @@ function openAirspaceModule(){
 
     // adsb.lol: free, no API key or registration required, community-run open data.
     const radiusNm = 70;
-    const url = `https://api.adsb.lol/v2/point/${latitude}/${longitude}/${radiusNm}`;
+    const targetUrl = `https://api.adsb.lol/v2/point/${latitude}/${longitude}/${radiusNm}`;
+    // Route through a CORS proxy — direct browser fetch() to adsb.lol has been
+    // unreliable (visiting the URL directly works since that bypasses CORS
+    // entirely, but a page's fetch() call is a different, stricter check).
+    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
 
     try{
       const res = await fetch(url);
-      if(!res.ok) throw new Error('adsb.lol returned ' + res.status);
+      if(!res.ok) throw new Error('Request failed: ' + res.status);
       const data = await res.json();
       const rawList = data.ac || data.aircraft || [];
 
@@ -1351,6 +1355,7 @@ function openAirspaceModule(){
         </div>
       `).join('');
     }catch(e){
+      console.error('AEGIS AIRSPACE: fetch failed', e);
       $('airStateLabel').textContent = 'ERROR';
       $('airList').innerHTML = `<div class="air-empty">Airspace query failed: ${e.message}</div>`;
       logLine($('dashLog'), ' AIRSPACE MODULE — FETCH FAILED', 'err');
