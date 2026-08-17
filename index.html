@@ -1309,26 +1309,24 @@ function openAirspaceModule(){
     $('airStateLabel').textContent = 'SCANNING';
     $('airList').innerHTML = '<div class="air-empty">Querying airspace…</div>';
 
-    // ~1.2 degree bounding box around the user (~130km) — a reasonable "overhead" radius
-    const d = 1.2;
-    const url = `https://opensky-network.org/api/states/all?lamin=${latitude-d}&lomin=${longitude-d}&lamax=${latitude+d}&lomax=${longitude+d}`;
+    // airplanes.live: free, no API key, reliable CORS support. Radius in nautical miles.
+    const radiusNm = 70;
+    const url = `https://api.airplanes.live/v2/point/${latitude}/${longitude}/${radiusNm}`;
 
     try{
       const res = await fetch(url);
-      if(!res.ok) throw new Error('OpenSky returned ' + res.status);
+      if(!res.ok) throw new Error('airplanes.live returned ' + res.status);
       const data = await res.json();
-      const states = data.states || [];
+      const rawList = data.ac || data.aircraft || [];
 
-      const aircraft = states
-        .filter(s => s[5] != null && s[6] != null && s[8] === false) // has position, not on ground
-        .map(s => ({
-          callsign: (s[1] || '').trim() || s[0].toUpperCase(),
-          country: s[2],
-          lon: s[5], lat: s[6],
-          altitudeM: s[7],
-          velocityMs: s[9],
-          heading: s[10],
-          distKm: haversineKm(latitude, longitude, s[6], s[5])
+      const aircraft = rawList
+        .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+        .map(a => ({
+          callsign: (a.flight || '').trim() || (a.r || a.hex || '').toUpperCase(),
+          type: a.t || 'Unknown type',
+          altitudeFt: typeof a.alt_baro === 'number' ? a.alt_baro : null,
+          speedKt: a.gs,
+          distKm: haversineKm(latitude, longitude, a.lat, a.lon)
         }))
         .sort((a,b) => a.distKm - b.distKm)
         .slice(0, 15);
@@ -1345,16 +1343,16 @@ function openAirspaceModule(){
         <div class="air-row">
           <div>
             <div class="call">${a.callsign}</div>
-            <div class="country">${a.country || 'Unknown origin'}</div>
+            <div class="country">${a.type}</div>
           </div>
-          <div class="stat"><span class="lbl">ALT</span>${a.altitudeM != null ? Math.round(a.altitudeM*3.281).toLocaleString()+' ft' : '—'}</div>
-          <div class="stat"><span class="lbl">SPD</span>${a.velocityMs != null ? Math.round(a.velocityMs*1.944)+' kt' : '—'}</div>
+          <div class="stat"><span class="lbl">ALT</span>${a.altitudeFt != null ? Math.round(a.altitudeFt).toLocaleString()+' ft' : '—'}</div>
+          <div class="stat"><span class="lbl">SPD</span>${a.speedKt != null ? Math.round(a.speedKt)+' kt' : '—'}</div>
           <div class="stat"><span class="lbl">DIST</span>${a.distKm.toFixed(0)} km</div>
         </div>
       `).join('');
     }catch(e){
       $('airStateLabel').textContent = 'ERROR';
-      $('airList').innerHTML = `<div class="air-empty">Airspace query failed: ${e.message}${e.message.includes('429') ? ' (rate limited — try again shortly)' : ''}</div>`;
+      $('airList').innerHTML = `<div class="air-empty">Airspace query failed: ${e.message}</div>`;
       logLine($('dashLog'), ' AIRSPACE MODULE — FETCH FAILED', 'err');
     }
   }, err=>{
