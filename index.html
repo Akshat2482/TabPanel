@@ -1309,13 +1309,13 @@ function openAirspaceModule(){
     $('airStateLabel').textContent = 'SCANNING';
     $('airList').innerHTML = '<div class="air-empty">Querying airspace…</div>';
 
-    // airplanes.live: free, no API key, reliable CORS support. Radius in nautical miles.
+    // adsb.lol: free, no API key or registration required, community-run open data.
     const radiusNm = 70;
-    const url = `https://api.airplanes.live/v2/point/${latitude}/${longitude}/${radiusNm}`;
+    const url = `https://api.adsb.lol/v2/point/${latitude}/${longitude}/${radiusNm}`;
 
     try{
       const res = await fetch(url);
-      if(!res.ok) throw new Error('airplanes.live returned ' + res.status);
+      if(!res.ok) throw new Error('adsb.lol returned ' + res.status);
       const data = await res.json();
       const rawList = data.ac || data.aircraft || [];
 
