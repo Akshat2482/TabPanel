@@ -332,6 +332,27 @@
   .clim-stat .m-label{ color:var(--text-dim); }
   .clim-stat .m-val{ color:var(--text); }
 
+  /* ---------- AIRSPACE MODULE ---------- */
+  #airspaceModal{
+    position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
+    background:rgba(2,6,12,.9); backdrop-filter:blur(3px);
+  }
+  #airspaceModal.active{ display:flex; }
+  .air-box{ width:min(80vw, 560px); position:relative; }
+  .air-list{
+    border:1px solid var(--line); background:#010305; max-height:360px; overflow-y:auto;
+  }
+  .air-row{
+    display:grid; grid-template-columns:1fr auto auto auto; gap:.8rem; align-items:center;
+    padding:.6rem .9rem; border-bottom:1px solid var(--line); font-size:.75rem;
+  }
+  .air-row:last-child{ border-bottom:none; }
+  .air-row .call{ color:var(--cyan); font-family:'JetBrains Mono'; font-weight:700; letter-spacing:.05em; }
+  .air-row .country{ color:var(--text-dim); font-size:.68rem; }
+  .air-row .stat{ color:var(--text); text-align:right; }
+  .air-row .stat .lbl{ display:block; color:var(--text-dim); font-size:.62rem; letter-spacing:.08em; }
+  .air-empty{ padding:1.4rem; text-align:center; color:var(--text-dim); font-size:.8rem; }
+
   ::-webkit-scrollbar{ display:none; }
 </style>
 </head>
@@ -486,6 +507,18 @@
         <div class="clim-stat"><span class="m-label">HUMIDITY</span><span class="m-val" id="climHum">—</span></div>
         <div class="clim-stat"><span class="m-label">LOCATION</span><span class="m-val" id="climLoc">—</span></div>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="airspaceModal">
+  <div class="air-box">
+    <div class="cam-header">
+      <div class="cam-title">AIRSPACE MODULE // <span id="airStateLabel">LOCATING</span></div>
+      <div class="cam-close" id="airClose">✕ CLOSE</div>
+    </div>
+    <div class="air-list" id="airList">
+      <div class="air-empty" id="airEmpty">Requesting location…</div>
     </div>
   </div>
 </div>
@@ -1251,6 +1284,90 @@ function closeClimateModule(){
 }
 $('climClose').onclick = closeClimateModule;
 
+/* ============ AIRSPACE MODULE (real aircraft overhead, OpenSky Network) ============ */
+function haversineKm(lat1, lon1, lat2, lon2){
+  const R = 6371;
+  const dLat = (lat2-lat1) * Math.PI/180;
+  const dLon = (lon2-lon1) * Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function openAirspaceModule(){
+  $('airspaceModal').classList.add('active');
+  $('airStateLabel').textContent = 'LOCATING';
+  $('airList').innerHTML = '<div class="air-empty" id="airEmpty">Requesting location…</div>';
+
+  if(!navigator.geolocation){
+    $('airStateLabel').textContent = 'ERROR';
+    $('airList').innerHTML = '<div class="air-empty">Geolocation not supported by this browser</div>';
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    const { latitude, longitude } = pos.coords;
+    $('airStateLabel').textContent = 'SCANNING';
+    $('airList').innerHTML = '<div class="air-empty">Querying airspace…</div>';
+
+    // ~1.2 degree bounding box around the user (~130km) — a reasonable "overhead" radius
+    const d = 1.2;
+    const url = `https://opensky-network.org/api/states/all?lamin=${latitude-d}&lomin=${longitude-d}&lamax=${latitude+d}&lomax=${longitude+d}`;
+
+    try{
+      const res = await fetch(url);
+      if(!res.ok) throw new Error('OpenSky returned ' + res.status);
+      const data = await res.json();
+      const states = data.states || [];
+
+      const aircraft = states
+        .filter(s => s[5] != null && s[6] != null && s[8] === false) // has position, not on ground
+        .map(s => ({
+          callsign: (s[1] || '').trim() || s[0].toUpperCase(),
+          country: s[2],
+          lon: s[5], lat: s[6],
+          altitudeM: s[7],
+          velocityMs: s[9],
+          heading: s[10],
+          distKm: haversineKm(latitude, longitude, s[6], s[5])
+        }))
+        .sort((a,b) => a.distKm - b.distKm)
+        .slice(0, 15);
+
+      $('airStateLabel').textContent = 'LIVE';
+      logLine($('dashLog'), ' AIRSPACE MODULE — DATA RETRIEVED');
+
+      if(aircraft.length === 0){
+        $('airList').innerHTML = '<div class="air-empty">No aircraft currently detected overhead</div>';
+        return;
+      }
+
+      $('airList').innerHTML = aircraft.map(a => `
+        <div class="air-row">
+          <div>
+            <div class="call">${a.callsign}</div>
+            <div class="country">${a.country || 'Unknown origin'}</div>
+          </div>
+          <div class="stat"><span class="lbl">ALT</span>${a.altitudeM != null ? Math.round(a.altitudeM*3.281).toLocaleString()+' ft' : '—'}</div>
+          <div class="stat"><span class="lbl">SPD</span>${a.velocityMs != null ? Math.round(a.velocityMs*1.944)+' kt' : '—'}</div>
+          <div class="stat"><span class="lbl">DIST</span>${a.distKm.toFixed(0)} km</div>
+        </div>
+      `).join('');
+    }catch(e){
+      $('airStateLabel').textContent = 'ERROR';
+      $('airList').innerHTML = `<div class="air-empty">Airspace query failed: ${e.message}${e.message.includes('429') ? ' (rate limited — try again shortly)' : ''}</div>`;
+      logLine($('dashLog'), ' AIRSPACE MODULE — FETCH FAILED', 'err');
+    }
+  }, err=>{
+    $('airStateLabel').textContent = 'ERROR';
+    $('airList').innerHTML = `<div class="air-empty">Location access denied: ${err.message}</div>`;
+  }, { enableHighAccuracy:false, timeout:10000 });
+}
+
+function closeAirspaceModule(){
+  $('airspaceModal').classList.remove('active');
+}
+$('airClose').onclick = closeAirspaceModule;
+
 /* ============ BROADCAST MODE (run on the laptop) ============ */
 // Open this same page with ?broadcast=1 on the laptop to turn it into the source feed.
 (function checkBroadcastMode(){
@@ -1357,7 +1474,7 @@ function initDashboard(){
   });
 
   // nav modules
-  const modules = ['CAMERAS','CLIMATE','ACCESS LOG','DIAGNOSTICS','NETWORK','SETTINGS'];
+  const modules = ['CAMERAS','CLIMATE','AIRSPACE','DIAGNOSTICS','NETWORK','SETTINGS'];
   const navGrid = $('navGrid');
   navGrid.innerHTML = '';
   modules.forEach(m=>{
@@ -1368,6 +1485,7 @@ function initDashboard(){
       logLine($('dashLog'), ` MODULE OPENED: ${m}`);
       if(m === 'CAMERAS') openCameraModule();
       if(m === 'CLIMATE') openClimateModule();
+      if(m === 'AIRSPACE') openAirspaceModule();
     };
     navGrid.appendChild(tile);
   });
