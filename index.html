@@ -1362,11 +1362,26 @@ function renderAircraftOnMap(aircraft){
 }
 
 async function fetchAdsbData(targetUrl){
-  // Calling adsb.lol directly, no proxy — we've never actually confirmed adsb.lol
-  // itself lacks CORS support; every failure so far has been the proxy layer.
-  const res = await fetch(targetUrl);
-  if(!res.ok) throw new Error('adsb.lol returned ' + res.status);
-  return res.json();
+  // Your own Cloudflare Worker proxy — reliable, not subject to free public
+  // proxy rate limits/downtime. Public proxies kept only as last-resort fallback.
+  const attempts = [
+    { url: `https://wispy-mud-79a3.akshatgayu.workers.dev/?url=${encodeURIComponent(targetUrl)}`, unwrap: r => r },
+    { url: `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`, unwrap: r => r },
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, unwrap: r => JSON.parse(r.contents) },
+  ];
+  let lastError = null;
+  for(const attempt of attempts){
+    try{
+      const res = await fetch(attempt.url);
+      if(!res.ok) throw new Error('Proxy returned ' + res.status);
+      const raw = await res.json();
+      return attempt.unwrap(raw);
+    }catch(e){
+      console.warn('AEGIS AIRSPACE: proxy attempt failed —', attempt.url, e.message);
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('All proxy attempts failed');
 }
 
 async function fetchAirspace(){
@@ -1583,3 +1598,4 @@ function initDashboard(){
 </script>
 </body>
 </html>
+
