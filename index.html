@@ -1361,6 +1361,28 @@ function renderAircraftOnMap(aircraft){
   });
 }
 
+async function fetchAdsbData(targetUrl){
+  // Try a couple of public CORS proxies in sequence — free proxies are flaky,
+  // so don't give up on the first failure.
+  const attempts = [
+    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, unwrap: r => r },
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, unwrap: r => JSON.parse(r.contents) },
+  ];
+  let lastError = null;
+  for(const attempt of attempts){
+    try{
+      const res = await fetch(attempt.url);
+      if(!res.ok) throw new Error('Proxy returned ' + res.status);
+      const raw = await res.json();
+      return attempt.unwrap(raw);
+    }catch(e){
+      console.warn('AEGIS AIRSPACE: proxy attempt failed', attempt.url, e.message);
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('All proxy attempts failed');
+}
+
 async function fetchAirspace(){
   if(!airspaceUserPos) return;
   const { latitude, longitude } = airspaceUserPos;
@@ -1368,15 +1390,9 @@ async function fetchAirspace(){
   // adsb.lol: free, no API key or registration required, community-run open data.
   const radiusNm = 70;
   const targetUrl = `https://api.adsb.lol/v2/point/${latitude}/${longitude}/${radiusNm}`;
-  // Routed through AllOrigins' /get endpoint — its /raw endpoint doesn't reliably
-  // send CORS headers, but /get does (response comes wrapped, needs unpacking).
-  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
 
   try{
-    const res = await fetch(proxyUrl);
-    if(!res.ok) throw new Error('Proxy request failed: ' + res.status);
-    const wrapper = await res.json();
-    const data = JSON.parse(wrapper.contents);
+    const data = await fetchAdsbData(targetUrl);
     const rawList = data.ac || data.aircraft || [];
 
     const aircraft = rawList
