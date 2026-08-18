@@ -8,6 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --bg-0:#040810;
@@ -332,26 +334,37 @@
   .clim-stat .m-label{ color:var(--text-dim); }
   .clim-stat .m-val{ color:var(--text); }
 
-  /* ---------- AIRSPACE MODULE ---------- */
+  /* ---------- AIRSPACE MODULE (satellite map) ---------- */
   #airspaceModal{
     position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
     background:rgba(2,6,12,.9); backdrop-filter:blur(3px);
   }
   #airspaceModal.active{ display:flex; }
-  .air-box{ width:min(80vw, 560px); position:relative; }
-  .air-list{
-    border:1px solid var(--line); background:#010305; max-height:360px; overflow-y:auto;
+  .air-box{ width:min(90vw, 820px); position:relative; }
+  .air-map-wrap{
+    position:relative; width:100%; height:min(70vh, 560px); border:1px solid var(--line); overflow:hidden;
   }
-  .air-row{
-    display:grid; grid-template-columns:1fr auto auto auto; gap:.8rem; align-items:center;
-    padding:.6rem .9rem; border-bottom:1px solid var(--line); font-size:.75rem;
+  #airspaceMap{ position:absolute; inset:0; width:100%; height:100%; background:#010305; }
+  #airspaceMap.night-mode{ filter:brightness(.5) contrast(1.15) saturate(.8) hue-rotate(190deg); }
+  .air-empty{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    text-align:center; color:var(--text-dim); font-size:.8rem; z-index:5; background:rgba(2,6,12,.7);
+    padding:1rem;
   }
-  .air-row:last-child{ border-bottom:none; }
-  .air-row .call{ color:var(--cyan); font-family:'JetBrains Mono'; font-weight:700; letter-spacing:.05em; }
-  .air-row .country{ color:var(--text-dim); font-size:.68rem; }
-  .air-row .stat{ color:var(--text); text-align:right; }
-  .air-row .stat .lbl{ display:block; color:var(--text-dim); font-size:.62rem; letter-spacing:.08em; }
-  .air-empty{ padding:1.4rem; text-align:center; color:var(--text-dim); font-size:.8rem; }
+  .plane-icon{
+    color:var(--cyan); text-shadow:0 0 6px var(--cyan), 0 0 2px #000;
+    font-size:20px; line-height:1; filter:drop-shadow(0 0 3px rgba(75,238,255,.8));
+  }
+  .plane-icon.self{ color:var(--green); text-shadow:0 0 6px var(--green); }
+  .leaflet-popup-content-wrapper{
+    background:var(--panel); border:1px solid var(--cyan-dim); border-radius:4px; color:var(--text);
+    font-family:'JetBrains Mono'; font-size:.75rem;
+  }
+  .leaflet-popup-tip{ background:var(--panel); border:1px solid var(--cyan-dim); }
+  .leaflet-popup-content{ margin:.7rem .8rem; }
+  .flight-popup .fp-title{ font-family:'Rajdhani'; font-weight:700; color:var(--cyan); font-size:.95rem; letter-spacing:.05em; margin-bottom:.4rem; }
+  .flight-popup .fp-row{ display:flex; justify-content:space-between; gap:1rem; padding:.15rem 0; }
+  .flight-popup .fp-row span:first-child{ color:var(--text-dim); }
 
   ::-webkit-scrollbar{ display:none; }
 </style>
@@ -517,7 +530,8 @@
       <div class="cam-title">AIRSPACE MODULE // <span id="airStateLabel">LOCATING</span></div>
       <div class="cam-close" id="airClose">✕ CLOSE</div>
     </div>
-    <div class="air-list" id="airList">
+    <div class="air-map-wrap">
+      <div id="airspaceMap"></div>
       <div class="air-empty" id="airEmpty">Requesting location…</div>
     </div>
   </div>
@@ -1293,81 +1307,136 @@ function haversineKm(lat1, lon1, lat2, lon2){
   return R * 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+let airspaceMap = null;
+let airspaceMarkers = [];
+let airspaceRefreshTimer = null;
+let airspaceUserPos = null;
+
+function isDaytimeLocal(){
+  const h = new Date().getHours();
+  return h >= 6 && h < 19; // rough day window; good enough without a sunrise/sunset lookup
+}
+
+function planeDivIcon(headingDeg, isSelf){
+  return L.divIcon({
+    className: '',
+    html: `<div class="plane-icon${isSelf ? ' self' : ''}" style="transform:rotate(${headingDeg}deg)">&#9992;</div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12]
+  });
+}
+
+function ensureAirspaceMap(lat, lon){
+  if(airspaceMap){ airspaceMap.remove(); airspaceMap = null; }
+  airspaceMap = L.map('airspaceMap', { zoomControl: true, attributionControl: false }).setView([lat, lon], 9);
+
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 18
+  }).addTo(airspaceMap);
+
+  $('airspaceMap').classList.toggle('night-mode', !isDaytimeLocal());
+
+  L.marker([lat, lon], { icon: planeDivIcon(0, true) })
+    .addTo(airspaceMap)
+    .bindPopup('<div class="flight-popup"><div class="fp-title">YOUR LOCATION</div></div>');
+}
+
+function renderAircraftOnMap(aircraft){
+  airspaceMarkers.forEach(m => airspaceMap.removeLayer(m));
+  airspaceMarkers = [];
+
+  aircraft.forEach(a=>{
+    const marker = L.marker([a.lat, a.lon], { icon: planeDivIcon(a.track || 0, false) }).addTo(airspaceMap);
+    const popupHtml = `
+      <div class="flight-popup">
+        <div class="fp-title">${a.callsign}</div>
+        <div class="fp-row"><span>TYPE</span><span>${a.type}</span></div>
+        <div class="fp-row"><span>ALTITUDE</span><span>${a.altitudeFt != null ? Math.round(a.altitudeFt).toLocaleString()+' ft' : '—'}</span></div>
+        <div class="fp-row"><span>SPEED</span><span>${a.speedKt != null ? Math.round(a.speedKt)+' kt' : '—'}</span></div>
+        <div class="fp-row"><span>HEADING</span><span>${a.track != null ? Math.round(a.track)+'°' : '—'}</span></div>
+        <div class="fp-row"><span>DISTANCE</span><span>${a.distKm.toFixed(0)} km</span></div>
+      </div>`;
+    marker.bindPopup(popupHtml);
+    airspaceMarkers.push(marker);
+  });
+}
+
+async function fetchAirspace(){
+  if(!airspaceUserPos) return;
+  const { latitude, longitude } = airspaceUserPos;
+
+  // adsb.lol: free, no API key or registration required, community-run open data.
+  const radiusNm = 70;
+  const targetUrl = `https://api.adsb.lol/v2/point/${latitude}/${longitude}/${radiusNm}`;
+  // Routed through AllOrigins' /get endpoint — its /raw endpoint doesn't reliably
+  // send CORS headers, but /get does (response comes wrapped, needs unpacking).
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+
+  try{
+    const res = await fetch(proxyUrl);
+    if(!res.ok) throw new Error('Proxy request failed: ' + res.status);
+    const wrapper = await res.json();
+    const data = JSON.parse(wrapper.contents);
+    const rawList = data.ac || data.aircraft || [];
+
+    const aircraft = rawList
+      .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
+      .map(a => ({
+        callsign: (a.flight || '').trim() || (a.r || a.hex || '').toUpperCase(),
+        type: a.t || 'Unknown type',
+        altitudeFt: typeof a.alt_baro === 'number' ? a.alt_baro : null,
+        speedKt: a.gs,
+        track: a.track,
+        lat: a.lat, lon: a.lon,
+        distKm: haversineKm(latitude, longitude, a.lat, a.lon)
+      }))
+      .sort((a,b) => a.distKm - b.distKm)
+      .slice(0, 40);
+
+    $('airStateLabel').textContent = 'LIVE';
+    $('airEmpty').style.display = aircraft.length === 0 ? 'flex' : 'none';
+    if(aircraft.length === 0) $('airEmpty').textContent = 'No aircraft currently detected overhead';
+    renderAircraftOnMap(aircraft);
+    logLine($('dashLog'), ` AIRSPACE MODULE — ${aircraft.length} AIRCRAFT TRACKED`);
+  }catch(e){
+    console.error('AEGIS AIRSPACE: fetch failed', e);
+    $('airStateLabel').textContent = 'ERROR';
+    $('airEmpty').style.display = 'flex';
+    $('airEmpty').textContent = 'Airspace query failed: ' + e.message;
+    logLine($('dashLog'), ' AIRSPACE MODULE — FETCH FAILED', 'err');
+  }
+}
+
 function openAirspaceModule(){
   $('airspaceModal').classList.add('active');
   $('airStateLabel').textContent = 'LOCATING';
-  $('airList').innerHTML = '<div class="air-empty" id="airEmpty">Requesting location…</div>';
+  $('airEmpty').style.display = 'flex';
+  $('airEmpty').textContent = 'Requesting location…';
 
   if(!navigator.geolocation){
     $('airStateLabel').textContent = 'ERROR';
-    $('airList').innerHTML = '<div class="air-empty">Geolocation not supported by this browser</div>';
+    $('airEmpty').textContent = 'Geolocation not supported by this browser';
     return;
   }
 
-  navigator.geolocation.getCurrentPosition(async pos=>{
-    const { latitude, longitude } = pos.coords;
+  navigator.geolocation.getCurrentPosition(pos=>{
+    airspaceUserPos = pos.coords;
     $('airStateLabel').textContent = 'SCANNING';
-    $('airList').innerHTML = '<div class="air-empty">Querying airspace…</div>';
-
-    // adsb.lol: free, no API key or registration required, community-run open data.
-    const radiusNm = 70;
-    const targetUrl = `https://api.adsb.lol/v2/point/${latitude}/${longitude}/${radiusNm}`;
-    // Route through a CORS proxy — direct browser fetch() to adsb.lol has been
-    // unreliable (visiting the URL directly works since that bypasses CORS
-    // entirely, but a page's fetch() call is a different, stricter check).
-    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-
-    try{
-      const res = await fetch(url);
-      if(!res.ok) throw new Error('Request failed: ' + res.status);
-      const data = await res.json();
-      const rawList = data.ac || data.aircraft || [];
-
-      const aircraft = rawList
-        .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
-        .map(a => ({
-          callsign: (a.flight || '').trim() || (a.r || a.hex || '').toUpperCase(),
-          type: a.t || 'Unknown type',
-          altitudeFt: typeof a.alt_baro === 'number' ? a.alt_baro : null,
-          speedKt: a.gs,
-          distKm: haversineKm(latitude, longitude, a.lat, a.lon)
-        }))
-        .sort((a,b) => a.distKm - b.distKm)
-        .slice(0, 15);
-
-      $('airStateLabel').textContent = 'LIVE';
-      logLine($('dashLog'), ' AIRSPACE MODULE — DATA RETRIEVED');
-
-      if(aircraft.length === 0){
-        $('airList').innerHTML = '<div class="air-empty">No aircraft currently detected overhead</div>';
-        return;
-      }
-
-      $('airList').innerHTML = aircraft.map(a => `
-        <div class="air-row">
-          <div>
-            <div class="call">${a.callsign}</div>
-            <div class="country">${a.type}</div>
-          </div>
-          <div class="stat"><span class="lbl">ALT</span>${a.altitudeFt != null ? Math.round(a.altitudeFt).toLocaleString()+' ft' : '—'}</div>
-          <div class="stat"><span class="lbl">SPD</span>${a.speedKt != null ? Math.round(a.speedKt)+' kt' : '—'}</div>
-          <div class="stat"><span class="lbl">DIST</span>${a.distKm.toFixed(0)} km</div>
-        </div>
-      `).join('');
-    }catch(e){
-      console.error('AEGIS AIRSPACE: fetch failed', e);
-      $('airStateLabel').textContent = 'ERROR';
-      $('airList').innerHTML = `<div class="air-empty">Airspace query failed: ${e.message}</div>`;
-      logLine($('dashLog'), ' AIRSPACE MODULE — FETCH FAILED', 'err');
-    }
+    $('airEmpty').textContent = 'Querying airspace…';
+    ensureAirspaceMap(pos.coords.latitude, pos.coords.longitude);
+    fetchAirspace();
+    airspaceRefreshTimer = setInterval(fetchAirspace, 20000);
   }, err=>{
     $('airStateLabel').textContent = 'ERROR';
-    $('airList').innerHTML = `<div class="air-empty">Location access denied: ${err.message}</div>`;
+    $('airEmpty').textContent = 'Location access denied: ' + err.message;
   }, { enableHighAccuracy:false, timeout:10000 });
 }
 
 function closeAirspaceModule(){
   $('airspaceModal').classList.remove('active');
+  if(airspaceRefreshTimer){ clearInterval(airspaceRefreshTimer); airspaceRefreshTimer = null; }
+  if(airspaceMap){ airspaceMap.remove(); airspaceMap = null; }
+  airspaceMarkers = [];
 }
 $('airClose').onclick = closeAirspaceModule;
 
