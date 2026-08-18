@@ -356,6 +356,22 @@
     font-size:20px; line-height:1; filter:drop-shadow(0 0 3px rgba(75,238,255,.8));
   }
   .plane-icon.self{ color:var(--green); text-shadow:0 0 6px var(--green); }
+
+  /* pulsing self-location dot — intentional exception to the no-circles rule,
+     matching Akshat's original ask for a pulsing blue location marker */
+  .pulse-dot{ width:18px; height:18px; position:relative; }
+  .pulse-dot .core{
+    width:14px; height:14px; background:#4b9eff; border:2px solid #fff; border-radius:50%;
+    position:absolute; top:2px; left:2px; box-shadow:0 0 10px rgba(75,158,255,.9);
+  }
+  .pulse-dot .ring{
+    width:14px; height:14px; border-radius:50%; background:rgba(75,158,255,.55);
+    position:absolute; top:2px; left:2px; animation:pulseRing 2s ease-out infinite;
+  }
+  @keyframes pulseRing{
+    0%{ transform:scale(1); opacity:.7; }
+    100%{ transform:scale(3.2); opacity:0; }
+  }
   .leaflet-popup-content-wrapper{
     background:var(--panel); border:1px solid var(--cyan-dim); border-radius:4px; color:var(--text);
     font-family:'JetBrains Mono'; font-size:.75rem;
@@ -1317,12 +1333,21 @@ function isDaytimeLocal(){
   return h >= 6 && h < 19; // rough day window; good enough without a sunrise/sunset lookup
 }
 
-function planeDivIcon(headingDeg, isSelf){
+function planeDivIcon(headingDeg){
   return L.divIcon({
     className: '',
-    html: `<div class="plane-icon${isSelf ? ' self' : ''}" style="transform:rotate(${headingDeg}deg)">&#9992;</div>`,
+    html: `<div class="plane-icon" style="transform:rotate(${headingDeg}deg)">&#9992;</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12]
+  });
+}
+
+function selfLocationDivIcon(){
+  return L.divIcon({
+    className: '',
+    html: `<div class="pulse-dot"><div class="ring"></div><div class="core"></div></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9]
   });
 }
 
@@ -1336,7 +1361,7 @@ function ensureAirspaceMap(lat, lon){
 
   $('airspaceMap').classList.toggle('night-mode', !isDaytimeLocal());
 
-  L.marker([lat, lon], { icon: planeDivIcon(0, true) })
+  L.marker([lat, lon], { icon: selfLocationDivIcon() })
     .addTo(airspaceMap)
     .bindPopup('<div class="flight-popup"><div class="fp-title">YOUR LOCATION</div></div>');
 }
@@ -1346,7 +1371,7 @@ function renderAircraftOnMap(aircraft){
   airspaceMarkers = [];
 
   aircraft.forEach(a=>{
-    const marker = L.marker([a.lat, a.lon], { icon: planeDivIcon(a.track || 0, false) }).addTo(airspaceMap);
+    const marker = L.marker([a.lat, a.lon], { icon: planeDivIcon(a.track || 0) }).addTo(airspaceMap);
     const popupHtml = `
       <div class="flight-popup">
         <div class="fp-title">${a.callsign}</div>
@@ -1417,10 +1442,16 @@ async function fetchAirspace(){
     logLine($('dashLog'), ` AIRSPACE MODULE — ${aircraft.length} AIRCRAFT TRACKED`);
   }catch(e){
     console.error('AEGIS AIRSPACE: fetch failed —', e.name + ':', e.message);
-    $('airStateLabel').textContent = 'ERROR';
-    $('airEmpty').style.display = 'flex';
-    $('airEmpty').textContent = 'Airspace query failed: ' + e.message;
     logLine($('dashLog'), ' AIRSPACE MODULE — FETCH FAILED', 'err');
+    // Only show the blocking error screen if we have no data on the map yet —
+    // a rate-limited background refresh shouldn't wipe out an already-live view.
+    if(airspaceMarkers.length === 0){
+      $('airStateLabel').textContent = 'ERROR';
+      $('airEmpty').style.display = 'flex';
+      $('airEmpty').textContent = 'Airspace query failed: ' + e.message;
+    } else {
+      $('airStateLabel').textContent = 'LIVE (stale)';
+    }
   }
 }
 
@@ -1598,4 +1629,3 @@ function initDashboard(){
 </script>
 </body>
 </html>
-
