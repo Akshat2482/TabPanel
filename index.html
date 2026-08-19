@@ -372,6 +372,11 @@
     0%{ transform:scale(1); opacity:.7; }
     100%{ transform:scale(3.2); opacity:0; }
   }
+  /* Smoothly glide plane markers to their new position on each refresh instead
+     of jumping — gives the impression of continuous real-time movement. */
+  #airspaceMap .leaflet-marker-icon.plane-marker{
+    transition: transform 3.6s linear;
+  }
   .leaflet-popup-content-wrapper{
     background:var(--panel); border:1px solid var(--cyan-dim); border-radius:4px; color:var(--text);
     font-family:'JetBrains Mono'; font-size:.75rem;
@@ -1335,7 +1340,7 @@ function isDaytimeLocal(){
 
 function planeDivIcon(headingDeg){
   return L.divIcon({
-    className: '',
+    className: 'plane-marker',
     html: `<div class="plane-icon" style="transform:rotate(${headingDeg}deg)">&#9992;</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12]
@@ -1366,27 +1371,133 @@ function ensureAirspaceMap(lat, lon){
     .bindPopup('<div class="flight-popup"><div class="fp-title">YOUR LOCATION</div></div>');
 }
 
-function renderAircraftOnMap(aircraft){
-  airspaceMarkers.forEach(m => airspaceMap.removeLayer(m));
-  airspaceMarkers = [];
+let airspaceMarkersByHex = new Map();
+let routeLine = null;
+let routeEndpoints = [];
 
-  aircraft.forEach(a=>{
-    const marker = L.marker([a.lat, a.lon], { icon: planeDivIcon(a.track || 0) }).addTo(airspaceMap);
-    const popupHtml = `
-      <div class="flight-popup">
-        <div class="fp-title">${a.callsign}</div>
-        <div class="fp-row"><span>TYPE</span><span>${a.type}</span></div>
-        <div class="fp-row"><span>ALTITUDE</span><span>${a.altitudeFt != null ? Math.round(a.altitudeFt).toLocaleString()+' ft' : '—'}</span></div>
-        <div class="fp-row"><span>SPEED</span><span>${a.speedKt != null ? Math.round(a.speedKt)+' kt' : '—'}</span></div>
-        <div class="fp-row"><span>HEADING</span><span>${a.track != null ? Math.round(a.track)+'°' : '—'}</span></div>
-        <div class="fp-row"><span>DISTANCE</span><span>${a.distKm.toFixed(0)} km</span></div>
-      </div>`;
-    marker.bindPopup(popupHtml);
-    airspaceMarkers.push(marker);
-  });
+function basePopupHtml(a, routeStatus){
+  return `
+    <div class="flight-popup">
+      <div class="fp-title">${a.callsign}</div>
+      <div class="fp-row"><span>TYPE</span><span>${a.type}</span></div>
+      <div class="fp-row"><span>ALTITUDE</span><span>${a.altitudeFt != null ? Math.round(a.altitudeFt).toLocaleString()+' ft' : '—'}</span></div>
+      <div class="fp-row"><span>SPEED</span><span>${a.speedKt != null ? Math.round(a.speedKt)+' kt' : '—'}</span></div>
+      <div class="fp-row"><span>HEADING</span><span>${a.track != null ? Math.round(a.track)+'°' : '—'}</span></div>
+      <div class="fp-row"><span>DISTANCE</span><span>${a.distKm.toFixed(0)} km</span></div>
+      <div class="fp-row"><span>ROUTE</span><span>${routeStatus || 'Click plane for route'}</span></div>
+    </div>`;
 }
 
-async function fetchAdsbData(targetUrl){
+// Great-circle interpolation so the route line actually curves realistically
+// across the map instead of a straight (visually wrong) line.
+function greatCirclePoints(lat1, lon1, lat2, lon2, numPoints=64){
+  const toRad = d => d*Math.PI/180, toDeg = r => r*180/Math.PI;
+  const φ1=toRad(lat1), λ1=toRad(lon1), φ2=toRad(lat2), λ2=toRad(lon2);
+  const d = 2*Math.asin(Math.sqrt(Math.sin((φ2-φ1)/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin((λ2-λ1)/2)**2));
+  if(d === 0) return [[lat1,lon1]];
+  const points = [];
+  for(let i=0;i<=numPoints;i++){
+    const f = i/numPoints;
+    const A = Math.sin((1-f)*d)/Math.sin(d);
+    const B = Math.sin(f*d)/Math.sin(d);
+    const x = A*Math.cos(φ1)*Math.cos(λ1) + B*Math.cos(φ2)*Math.cos(λ2);
+    const y = A*Math.cos(φ1)*Math.sin(λ1) + B*Math.cos(φ2)*Math.sin(λ2);
+    const z = A*Math.sin(φ1) + B*Math.sin(φ2);
+    const φi = Math.atan2(z, Math.sqrt(x*x+y*y));
+    const λi = Math.atan2(y, x);
+    points.push([toDeg(φi), toDeg(λi)]);
+  }
+  return points;
+}
+
+function clearRoute(){
+  if(routeLine){ airspaceMap.removeLayer(routeLine); routeLine = null; }
+  routeEndpoints.forEach(m => airspaceMap.removeLayer(m));
+  routeEndpoints = [];
+}
+
+async function lookupAndDrawRoute(marker){
+  const a = marker.aircraftData;
+  clearRoute();
+  marker.routeStatusText = 'Looking up…';
+  marker.setPopupContent(basePopupHtml(a, marker.routeStatusText));
+
+  try{
+    const url = `https://api.adsbdb.com/v0/callsign/${encodeURIComponent(a.callsign)}`;
+    const data = await fetchJsonViaProxy(url);
+    const route = data.response && data.response.flightroute;
+
+    if(!route || !route.origin || !route.destination){
+      marker.routeStatusText = 'No route data for this flight';
+      marker.setPopupContent(basePopupHtml(a, marker.routeStatusText));
+      logLine($('dashLog'), ` AIRSPACE — no route data for ${a.callsign}`);
+      return;
+    }
+
+    const o = route.origin, d = route.destination;
+    marker.routeStatusText = `${o.iata_code || o.icao_code} → ${d.iata_code || d.icao_code}`;
+    marker.setPopupContent(basePopupHtml(a, marker.routeStatusText));
+
+    const pts = greatCirclePoints(o.latitude, o.longitude, d.latitude, d.longitude);
+    routeLine = L.polyline(pts, { color: '#4beeff', weight: 2, opacity: 0.8, dashArray: '4 6' }).addTo(airspaceMap);
+
+    const airportIcon = L.divIcon({
+      className: '', html: `<div class="plane-icon" style="font-size:14px">&#9679;</div>`, iconSize: [14,14], iconAnchor: [7,7]
+    });
+    const originMarker = L.marker([o.latitude, o.longitude], { icon: airportIcon }).addTo(airspaceMap)
+      .bindPopup(`<div class="flight-popup"><div class="fp-title">${o.name}</div><div class="fp-row"><span>CODE</span><span>${o.iata_code || o.icao_code}</span></div></div>`);
+    const destMarker = L.marker([d.latitude, d.longitude], { icon: airportIcon }).addTo(airspaceMap)
+      .bindPopup(`<div class="flight-popup"><div class="fp-title">${d.name}</div><div class="fp-row"><span>CODE</span><span>${d.iata_code || d.icao_code}</span></div></div>`);
+    routeEndpoints = [originMarker, destMarker];
+
+    logLine($('dashLog'), ` AIRSPACE — route resolved: ${a.callsign} (${o.iata_code||o.icao_code} → ${d.iata_code||d.icao_code})`);
+  }catch(e){
+    marker.routeStatusText = 'Route lookup failed';
+    marker.setPopupContent(basePopupHtml(a, marker.routeStatusText));
+    console.warn('AEGIS AIRSPACE: route lookup failed', e.message);
+    logLine($('dashLog'), ` AIRSPACE — route lookup failed for ${a.callsign}`, 'err');
+  }
+}
+
+function renderAircraftOnMap(aircraft){
+  const seenHex = new Set();
+
+  aircraft.forEach(a=>{
+    seenHex.add(a.hex);
+    let marker = airspaceMarkersByHex.get(a.hex);
+
+    if(marker){
+      // Update an existing marker in place — this is what makes the CSS
+      // transition on .plane-marker actually animate a smooth glide.
+      marker.setLatLng([a.lat, a.lon]);
+      const el = marker.getElement();
+      if(el){
+        const iconEl = el.querySelector('.plane-icon');
+        if(iconEl) iconEl.style.transform = `rotate(${a.track || 0}deg)`;
+      }
+      marker.aircraftData = a;
+      marker.setPopupContent(basePopupHtml(a, marker.routeStatusText));
+    } else {
+      marker = L.marker([a.lat, a.lon], { icon: planeDivIcon(a.track || 0) }).addTo(airspaceMap);
+      marker.aircraftData = a;
+      marker.routeStatusText = null;
+      marker.bindPopup(basePopupHtml(a, null));
+      marker.on('click', ()=> lookupAndDrawRoute(marker));
+      airspaceMarkersByHex.set(a.hex, marker);
+    }
+  });
+
+  // Remove markers for aircraft that are no longer in range
+  for(const [hex, marker] of airspaceMarkersByHex){
+    if(!seenHex.has(hex)){
+      airspaceMap.removeLayer(marker);
+      airspaceMarkersByHex.delete(hex);
+    }
+  }
+  airspaceMarkers = Array.from(airspaceMarkersByHex.values());
+}
+
+async function fetchJsonViaProxy(targetUrl){
   // Your own Cloudflare Worker proxy — reliable, not subject to free public
   // proxy rate limits/downtime. Public proxies kept only as last-resort fallback.
   const attempts = [
@@ -1402,7 +1513,7 @@ async function fetchAdsbData(targetUrl){
       const raw = await res.json();
       return attempt.unwrap(raw);
     }catch(e){
-      console.warn('AEGIS AIRSPACE: proxy attempt failed —', attempt.url, e.message);
+      console.warn('AEGIS: proxy attempt failed —', attempt.url, e.message);
       lastError = e;
     }
   }
@@ -1414,16 +1525,19 @@ async function fetchAirspace(){
   const { latitude, longitude } = airspaceUserPos;
 
   // adsb.lol: free, no API key or registration required, community-run open data.
-  const radiusNm = 70;
+  // 250nm is the practical/documented max radius for this endpoint — a true
+  // worldwide feed is tens of thousands of aircraft and isn't renderable live.
+  const radiusNm = 250;
   const targetUrl = `https://api.adsb.lol/v2/point/${latitude}/${longitude}/${radiusNm}`;
 
   try{
-    const data = await fetchAdsbData(targetUrl);
+    const data = await fetchJsonViaProxy(targetUrl);
     const rawList = data.ac || data.aircraft || [];
 
     const aircraft = rawList
       .filter(a => a.lat != null && a.lon != null && a.alt_baro !== 'ground')
       .map(a => ({
+        hex: a.hex,
         callsign: (a.flight || '').trim() || (a.r || a.hex || '').toUpperCase(),
         type: a.t || 'Unknown type',
         altitudeFt: typeof a.alt_baro === 'number' ? a.alt_baro : null,
@@ -1433,7 +1547,7 @@ async function fetchAirspace(){
         distKm: haversineKm(latitude, longitude, a.lat, a.lon)
       }))
       .sort((a,b) => a.distKm - b.distKm)
-      .slice(0, 40);
+      .slice(0, 80);
 
     $('airStateLabel').textContent = 'LIVE';
     $('airEmpty').style.display = aircraft.length === 0 ? 'flex' : 'none';
@@ -1473,7 +1587,7 @@ function openAirspaceModule(){
     $('airEmpty').textContent = 'Querying airspace…';
     ensureAirspaceMap(pos.coords.latitude, pos.coords.longitude);
     fetchAirspace();
-    airspaceRefreshTimer = setInterval(fetchAirspace, 20000);
+    airspaceRefreshTimer = setInterval(fetchAirspace, 4000);
   }, err=>{
     $('airStateLabel').textContent = 'ERROR';
     $('airEmpty').textContent = 'Location access denied: ' + err.message;
@@ -1485,6 +1599,9 @@ function closeAirspaceModule(){
   if(airspaceRefreshTimer){ clearInterval(airspaceRefreshTimer); airspaceRefreshTimer = null; }
   if(airspaceMap){ airspaceMap.remove(); airspaceMap = null; }
   airspaceMarkers = [];
+  airspaceMarkersByHex = new Map();
+  routeLine = null;
+  routeEndpoints = [];
 }
 $('airClose').onclick = closeAirspaceModule;
 
