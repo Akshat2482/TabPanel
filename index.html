@@ -2217,7 +2217,10 @@ $('voiceBtn').onclick = ()=>{
   }
 
   function captureAndSendFace(videoEl, box){
-    if(!broadcastDataConn) return;
+    if(!broadcastDataConn){
+      console.warn('AEGIS BROADCAST: face detected but no data connection yet — capture skipped');
+      return;
+    }
     const pad = 24;
     const sx = Math.max(0, box.x - pad);
     const sy = Math.max(0, box.y - pad);
@@ -2241,15 +2244,19 @@ $('voiceBtn').onclick = ()=>{
   }
 
   function startFaceTracking(videoEl, overlayCanvas){
+    console.log('AEGIS BROADCAST: face tracking loop started');
     const ctx = overlayCanvas.getContext('2d');
+    let tickCount = 0;
     setInterval(async ()=>{
       if(!faceModelsReady || videoEl.videoWidth === 0) return;
+      tickCount++;
       overlayCanvas.width = videoEl.videoWidth;
       overlayCanvas.height = videoEl.videoHeight;
       try{
         const detections = await faceapi.detectAllFaces(
           videoEl, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 })
         );
+        if(tickCount % 5 === 0) console.log('AEGIS BROADCAST: detection tick, faces found =', detections.length);
 
         ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         ctx.strokeStyle = '#4beeff';
@@ -2278,8 +2285,12 @@ $('voiceBtn').onclick = ()=>{
       video.srcObject = stream;
       $('broadcastStatus').textContent = 'Camera ready. Registering as broadcast source…';
 
+      // startFaceTracking's own interval already waits for videoWidth to be
+      // nonzero, so there's no need to also gate on the loadedmetadata event
+      // (which fires almost immediately — often before the model finishes
+      // loading — so listening for it afterward would miss it entirely).
       loadBroadcastFaceModel().then(()=>{
-        video.addEventListener('loadedmetadata', ()=> startFaceTracking(video, $('broadcastOverlay')), { once:true });
+        startFaceTracking(video, $('broadcastOverlay'));
       });
 
       const peer = new Peer(REMOTE_PEER_ID);
