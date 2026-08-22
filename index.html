@@ -439,6 +439,27 @@
   }
   #mapsMap{ position:absolute; inset:0; width:100%; height:100%; background:#010305; }
   #mapsMap.night-mode{ filter:brightness(.5) contrast(1.15) saturate(.8) hue-rotate(190deg); }
+  .maps-sweep{
+    position:absolute; top:0; bottom:0; width:3px;
+    background:linear-gradient(to bottom, transparent, var(--cyan), transparent);
+    box-shadow:0 0 14px var(--cyan);
+    left:0; animation:camSweepMove 4.5s linear infinite;
+    z-index:450; pointer-events:none;
+  }
+  .maps-box.fullscreen{ width:96vw; }
+  .maps-box.fullscreen .maps-map-wrap{ height:84vh; }
+  .maps-toggle-btn{
+    font-family:'Rajdhani'; font-weight:600; letter-spacing:.08em; font-size:.78rem;
+    background:transparent; color:var(--text-dim); border:1px solid var(--line); padding:0 .9rem; cursor:pointer;
+  }
+  .maps-toggle-btn:hover{ color:var(--cyan); border-color:var(--cyan-dim); }
+  .maps-toggle-btn.active{ color:var(--cyan); border-color:var(--cyan); background:rgba(75,238,255,.08); }
+  .maps-route-info{
+    position:absolute; top:.6rem; left:.6rem; z-index:460; background:rgba(5,15,25,.8);
+    border:1px solid var(--cyan-dim); padding:.5rem .8rem; font-size:.72rem; color:var(--cyan);
+    display:none; letter-spacing:.05em;
+  }
+  .maps-route-info.show{ display:block; }
 
   /* ---------- VOICE COMMAND ---------- */
   .voice-btn{
@@ -636,17 +657,23 @@
 </div>
 
 <div id="mapsModal">
-  <div class="maps-box">
+  <div class="maps-box" id="mapsBox">
     <div class="cam-header">
       <div class="cam-title">MAPS MODULE // <span id="mapsStateLabel">LOCATING</span></div>
-      <div class="cam-close" id="mapsClose">✕ CLOSE</div>
+      <div style="display:flex; gap:.5rem;">
+        <div class="cam-close" id="mapsFullscreenBtn">⛶ EXPAND</div>
+        <div class="cam-close" id="mapsClose">✕ CLOSE</div>
+      </div>
     </div>
     <div class="maps-search">
       <input type="text" id="mapsSearchInput" placeholder="Search a place, address, or landmark…">
       <button id="mapsSearchBtn">SEARCH</button>
+      <button class="maps-toggle-btn" id="mapsRouteBtn">ROUTE</button>
     </div>
     <div class="maps-map-wrap">
       <div id="mapsMap"></div>
+      <div class="maps-sweep"></div>
+      <div class="maps-route-info" id="mapsRouteInfo"></div>
       <div class="air-empty" id="mapsEmpty">Requesting location…</div>
     </div>
   </div>
@@ -1804,6 +1831,8 @@ function ensureMapsMap(lat, lon){
   L.marker([lat, lon], { icon: selfLocationDivIcon() })
     .addTo(mapsMap)
     .bindPopup('<div class="flight-popup"><div class="fp-title">YOUR LOCATION</div></div>');
+
+  mapsMap.on('click', handleRouteMapClick);
 }
 
 async function mapsSearchPlace(query){
@@ -1851,6 +1880,9 @@ function openMapsModule(){
   $('mapsEmpty').style.display = 'flex';
   $('mapsEmpty').textContent = 'Requesting location…';
   $('mapsSearchInput').value = '';
+  $('mapsBox').classList.remove('fullscreen');
+  $('mapsFullscreenBtn').textContent = '⛶ EXPAND';
+  exitRouteMode();
 
   if(!navigator.geolocation){
     $('mapsStateLabel').textContent = 'ERROR';
@@ -1872,12 +1904,100 @@ function closeMapsModule(){
   $('mapsModal').classList.remove('active');
   if(mapsMap){ mapsMap.remove(); mapsMap = null; }
   mapsSearchMarker = null;
+  exitRouteMode();
 }
 $('mapsClose').onclick = closeMapsModule;
 $('mapsSearchBtn').onclick = ()=> mapsSearchPlace($('mapsSearchInput').value.trim());
 $('mapsSearchInput').addEventListener('keydown', e=>{
   if(e.key === 'Enter') mapsSearchPlace($('mapsSearchInput').value.trim());
 });
+
+/* ---- fullscreen toggle ---- */
+$('mapsFullscreenBtn').onclick = ()=>{
+  const isFull = $('mapsBox').classList.toggle('fullscreen');
+  $('mapsFullscreenBtn').textContent = isFull ? '⛶ COLLAPSE' : '⛶ EXPAND';
+  // Leaflet needs to know its container resized, or tiles render wrong until interacted with
+  setTimeout(()=>{ if(mapsMap) mapsMap.invalidateSize(); }, 260);
+};
+
+/* ---- route / directions (OSRM, same routing engine style as Nexus Map) ---- */
+let routeModeActive = false;
+let routeStartLatLng = null;
+let routeStartMarker = null;
+let routeEndMarker = null;
+let routePolyline = null;
+
+function exitRouteMode(){
+  routeModeActive = false;
+  routeStartLatLng = null;
+  $('mapsRouteBtn').classList.remove('active');
+  $('mapsRouteInfo').classList.remove('show');
+  if(routeStartMarker){ mapsMap && mapsMap.removeLayer(routeStartMarker); routeStartMarker = null; }
+  if(routeEndMarker){ mapsMap && mapsMap.removeLayer(routeEndMarker); routeEndMarker = null; }
+  if(routePolyline){ mapsMap && mapsMap.removeLayer(routePolyline); routePolyline = null; }
+}
+
+$('mapsRouteBtn').onclick = ()=>{
+  if(routeModeActive){
+    exitRouteMode();
+  } else {
+    exitRouteMode(); // clear any previous route first
+    routeModeActive = true;
+    $('mapsRouteBtn').classList.add('active');
+    $('mapsRouteInfo').classList.add('show');
+    $('mapsRouteInfo').textContent = 'Tap start point on the map…';
+  }
+};
+
+async function fetchOsrmRoute(start, end){
+  const url = `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`;
+  let data;
+  try{
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('status ' + res.status);
+    data = await res.json();
+  }catch(e){
+    data = await fetchJsonViaProxy(url);
+  }
+  if(!data.routes || data.routes.length === 0) throw new Error('No route found');
+  return data.routes[0];
+}
+
+async function handleRouteMapClick(e){
+  if(!routeModeActive) return;
+
+  if(!routeStartLatLng){
+    routeStartLatLng = e.latlng;
+    routeStartMarker = L.marker(e.latlng, { icon: selfLocationDivIcon() }).addTo(mapsMap)
+      .bindPopup('<div class="flight-popup"><div class="fp-title">START</div></div>');
+    $('mapsRouteInfo').textContent = 'Tap destination point…';
+    return;
+  }
+
+  const endLatLng = e.latlng;
+  routeEndMarker = L.marker(endLatLng, { icon: selfLocationDivIcon() }).addTo(mapsMap)
+    .bindPopup('<div class="flight-popup"><div class="fp-title">DESTINATION</div></div>');
+  $('mapsRouteInfo').textContent = 'Calculating route…';
+
+  try{
+    const route = await fetchOsrmRoute(routeStartLatLng, endLatLng);
+    const coords = route.geometry.coordinates.map(c => [c[1], c[0]]); // OSRM gives [lon,lat]
+    routePolyline = L.polyline(coords, { color: '#4beeff', weight: 3, opacity: 0.85 }).addTo(mapsMap);
+    mapsMap.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
+
+    const km = (route.distance / 1000).toFixed(1);
+    const mins = Math.round(route.duration / 60);
+    $('mapsRouteInfo').textContent = `${km} km — ${mins} min`;
+    logLine($('dashLog'), ` MAPS — route calculated: ${km} km / ${mins} min`);
+  }catch(err){
+    $('mapsRouteInfo').textContent = 'Route calculation failed';
+    console.error('AEGIS MAPS: route failed', err.message);
+  }
+
+  routeModeActive = false;
+  $('mapsRouteBtn').classList.remove('active');
+  routeStartLatLng = null;
+}
 
 /* ============ VOICE COMMANDS ============ */
 function showVoiceTranscript(text, duration){
