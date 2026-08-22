@@ -349,6 +349,19 @@
     background:rgba(5,15,25,.6); padding:.2rem .5rem; letter-spacing:.05em;
   }
 
+  /* ---------- FACES MODULE ---------- */
+  .faces-grid{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(96px,1fr)); gap:.6rem;
+    max-height:min(60vh, 420px); overflow-y:auto; border:1px solid var(--line); background:#010305; padding:.8rem;
+  }
+  .face-card{ position:relative; border:1px solid var(--cyan-dim); overflow:hidden; }
+  .face-card img{ width:100%; display:block; aspect-ratio:1/1; object-fit:cover; }
+  .face-time{
+    position:absolute; bottom:0; left:0; right:0; background:rgba(2,6,12,.75); color:var(--cyan);
+    font-size:.6rem; text-align:center; padding:.15rem 0; letter-spacing:.05em;
+  }
+  .faces-empty{ padding:2rem 1rem; text-align:center; color:var(--text-dim); font-size:.8rem; grid-column:1/-1; }
+
   /* ---------- CLIMATE MODULE ---------- */
   #climateModal{
     position:fixed; inset:0; z-index:1200; display:none; align-items:center; justify-content:center;
@@ -624,6 +637,16 @@
   </div>
 </div>
 
+<div id="facesModal">
+  <div class="cam-box">
+    <div class="cam-header">
+      <div class="cam-title">FACES MODULE // <span id="facesStateLabel">STANDBY</span></div>
+      <div class="cam-close" id="facesClose">✕ CLOSE</div>
+    </div>
+    <div class="faces-grid" id="facesGrid"></div>
+  </div>
+</div>
+
 <div id="climateModal">
   <div class="cam-box">
     <div class="cam-header">
@@ -686,6 +709,7 @@
   <div class="auth-title">BROADCASTING TO AEGIS PANEL</div>
   <div class="scan-frame" id="broadcastFrame">
     <video id="broadcastVideo" autoplay muted playsinline></video>
+    <canvas id="broadcastOverlay"></canvas>
     <div class="corner tl"></div><div class="corner tr"></div>
     <div class="corner bl"></div><div class="corner br"></div>
   </div>
@@ -1294,17 +1318,50 @@ function unlockDashboard(){
 // Pick your own unique ID here so nobody else on PeerJS's public broker collides with it.
 // Use the SAME value in both places it appears in this file.
 const REMOTE_PEER_ID = 'aegis-laptop-akshat-9214';
+const FACE_CAPTURES_KEY = 'aegis:face-captures';
+const FACE_CAPTURES_MAX = 40;
 
 let viewerPeer = null;
 let viewerCall = null;
+let viewerDataConn = null;
+let faceCaptures = [];
 
-async function openCameraModule(){
-  console.log('AEGIS CAM: opening camera module, connecting to peer', REMOTE_PEER_ID);
-  $('cameraModal').classList.add('active');
-  $('camStateLabel').textContent = 'CONNECTING';
-  $('camStatusText').textContent = 'Connecting to laptop feed…';
-  $('camResolution').textContent = '—';
-  resetCamZoom();
+function loadFaceCaptures(){
+  try{
+    const raw = localStorage.getItem(FACE_CAPTURES_KEY);
+    if(raw) faceCaptures = JSON.parse(raw);
+  }catch(e){
+    console.warn('AEGIS FACES: load failed', e.message);
+  }
+}
+function saveFaceCaptures(){
+  try{
+    localStorage.setItem(FACE_CAPTURES_KEY, JSON.stringify(faceCaptures.slice(0, FACE_CAPTURES_MAX)));
+  }catch(e){
+    console.warn('AEGIS FACES: save failed (storage may be full)', e.message);
+  }
+}
+loadFaceCaptures();
+
+function renderFacesGallery(){
+  const grid = $('facesGrid');
+  if(faceCaptures.length === 0){
+    grid.innerHTML = '<div class="faces-empty">No faces captured yet — open the laptop camera (CAMERAS module) to start tracking.</div>';
+    return;
+  }
+  grid.innerHTML = faceCaptures.map(f => `
+    <div class="face-card">
+      <img src="${f.image}" alt="captured face">
+      <div class="face-time">${new Date(f.timestamp).toLocaleTimeString('en-US',{hour12:false})}</div>
+    </div>
+  `).join('');
+}
+
+// Establishes (once) the persistent peer + data connection to the laptop.
+// Kept alive across CAMERAS/FACES modal open+close so face tracking and
+// capture delivery keep working in the background.
+function ensureLaptopConnection(){
+  if(viewerPeer) return; // already connecting or connected
 
   if(typeof Peer === 'undefined'){
     console.error('AEGIS CAM: Peer (PeerJS) is undefined — library failed to load');
@@ -1346,10 +1403,18 @@ async function openCameraModule(){
 
   viewerPeer.on('open', myId=>{
     console.log('AEGIS CAM: viewer peer opened, my id =', myId, '— requesting connection from', REMOTE_PEER_ID);
-    // A lightweight data connection just to notify the broadcaster we're here —
-    // it responds by calling US with its real video stream.
     const conn = viewerPeer.connect(REMOTE_PEER_ID);
-    conn.on('open', ()=> console.log('AEGIS CAM: data connection open, waiting for incoming call...'));
+    viewerDataConn = conn;
+    conn.on('open', ()=> console.log('AEGIS CAM: data connection open, face tracking active'));
+    conn.on('data', data=>{
+      if(data && data.type === 'face-capture'){
+        faceCaptures.unshift({ image: data.image, timestamp: data.timestamp });
+        faceCaptures = faceCaptures.slice(0, FACE_CAPTURES_MAX);
+        saveFaceCaptures();
+        logLine($('dashLog'), ' FACES — new capture from laptop cam');
+        if($('facesModal').classList.contains('active')) renderFacesGallery();
+      }
+    });
     conn.on('error', err=> console.error('AEGIS CAM: data connection error', err));
   });
 
@@ -1365,14 +1430,42 @@ async function openCameraModule(){
   });
 }
 
+function openCameraModule(){
+  console.log('AEGIS CAM: opening camera module');
+  $('cameraModal').classList.add('active');
+  resetCamZoom();
+
+  if(viewerCall && $('camVideo').srcObject){
+    // already live from a previous open — nothing to redo
+    $('camStateLabel').textContent = 'LIVE';
+    $('camStatusText').textContent = 'Feed active';
+  } else {
+    $('camStateLabel').textContent = 'CONNECTING';
+    $('camStatusText').textContent = 'Connecting to laptop feed…';
+    $('camResolution').textContent = '—';
+    ensureLaptopConnection();
+  }
+}
+
 function closeCameraModule(){
-  if(viewerCall){ viewerCall.close(); viewerCall = null; }
-  if(viewerPeer){ viewerPeer.destroy(); viewerPeer = null; }
   $('cameraModal').classList.remove('active');
   resetCamZoom();
-  logLine($('dashLog'), ' LAPTOP CAM CLOSED');
+  // Intentionally NOT closing viewerCall/viewerPeer — face tracking and the
+  // data channel need to keep running in the background after this closes.
+  logLine($('dashLog'), ' LAPTOP CAM VIEW CLOSED (tracking continues)');
 }
 $('camClose').onclick = closeCameraModule;
+
+function openFacesModule(){
+  $('facesModal').classList.add('active');
+  $('facesStateLabel').textContent = viewerPeer ? 'ACTIVE' : 'STANDBY';
+  renderFacesGallery();
+  ensureLaptopConnection();
+}
+function closeFacesModule(){
+  $('facesModal').classList.remove('active');
+}
+$('facesClose').onclick = closeFacesModule;
 
 /* ============ CAMERA ZOOM / PAN (digital, CSS-transform based) ============ */
 let camZoom = 1;
@@ -2091,6 +2184,10 @@ $('voiceBtn').onclick = ()=>{
   }
 
   let tabletConnected = false;
+  let broadcastDataConn = null;
+  let faceModelsReady = false;
+  let lastFaceCaptureTime = 0;
+  const FACE_CAPTURE_COOLDOWN_MS = 8000;
 
   // Auto-recovery: if the tablet isn't currently connected, reload the page
   // every 2 minutes to clear out any stuck PeerJS/WebRTC state. Never reloads
@@ -2104,11 +2201,81 @@ $('voiceBtn').onclick = ()=>{
     }
   }, 120000);
 
+  async function loadBroadcastFaceModel(){
+    try{
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      faceModelsReady = true;
+      console.log('AEGIS BROADCAST: face detection model loaded');
+    }catch(e){
+      console.error('AEGIS BROADCAST: face model load failed', e.message);
+    }
+  }
+
+  function captureAndSendFace(videoEl, box){
+    if(!broadcastDataConn) return;
+    const pad = 24;
+    const sx = Math.max(0, box.x - pad);
+    const sy = Math.max(0, box.y - pad);
+    const sw = Math.min(videoEl.videoWidth - sx, box.width + pad*2);
+    const sh = Math.min(videoEl.videoHeight - sy, box.height + pad*2);
+    if(sw <= 0 || sh <= 0) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 200; canvas.height = 200;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoEl, sx, sy, sw, sh, 0, 0, 200, 200);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+
+    try{
+      broadcastDataConn.send({ type: 'face-capture', image: dataUrl, timestamp: Date.now() });
+      console.log('AEGIS BROADCAST: face capture sent to panel');
+      $('broadcastStatus').textContent = 'Person detected — capture sent to panel.';
+    }catch(e){
+      console.warn('AEGIS BROADCAST: failed to send capture', e.message);
+    }
+  }
+
+  function startFaceTracking(videoEl, overlayCanvas){
+    const ctx = overlayCanvas.getContext('2d');
+    setInterval(async ()=>{
+      if(!faceModelsReady || videoEl.videoWidth === 0) return;
+      overlayCanvas.width = videoEl.videoWidth;
+      overlayCanvas.height = videoEl.videoHeight;
+      try{
+        const detections = await faceapi.detectAllFaces(
+          videoEl, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 })
+        );
+
+        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        ctx.strokeStyle = '#4beeff';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = '#4beeff';
+        ctx.shadowBlur = 8;
+        detections.forEach(d=>{
+          const b = d.box;
+          ctx.strokeRect(b.x, b.y, b.width, b.height);
+        });
+
+        if(detections.length > 0 && Date.now() - lastFaceCaptureTime > FACE_CAPTURE_COOLDOWN_MS){
+          lastFaceCaptureTime = Date.now();
+          captureAndSendFace(videoEl, detections[0].box);
+        }
+      }catch(e){
+        console.warn('AEGIS BROADCAST: detection error', e.message);
+      }
+    }, 700);
+  }
+
   navigator.mediaDevices.getUserMedia({ video:true })
     .then(stream=>{
       console.log('AEGIS BROADCAST: camera acquired,', stream.getVideoTracks().length, 'track(s)');
-      $('broadcastVideo').srcObject = stream;
+      const video = $('broadcastVideo');
+      video.srcObject = stream;
       $('broadcastStatus').textContent = 'Camera ready. Registering as broadcast source…';
+
+      loadBroadcastFaceModel().then(()=>{
+        video.addEventListener('loadedmetadata', ()=> startFaceTracking(video, $('broadcastOverlay')), { once:true });
+      });
 
       const peer = new Peer(REMOTE_PEER_ID);
       peer.on('open', id=>{
@@ -2117,15 +2284,17 @@ $('voiceBtn').onclick = ()=>{
       });
       peer.on('connection', conn=>{
         console.log('AEGIS BROADCAST: viewer connected (', conn.peer, ') — calling them with our stream');
+        broadcastDataConn = conn;
         const call = peer.call(conn.peer, stream);
         tabletConnected = true;
-        $('broadcastStatus').textContent = 'Tablet connected — streaming live.';
+        $('broadcastStatus').textContent = 'Tablet connected — streaming live. Tracking for people…';
         call.on('close', ()=>{
           console.log('AEGIS BROADCAST: call closed');
           tabletConnected = false;
           $('broadcastStatus').textContent = 'Tablet disconnected. Waiting…';
         });
         call.on('error', err=>{ console.error('AEGIS BROADCAST: call error', err); });
+        conn.on('close', ()=>{ broadcastDataConn = null; });
       });
       peer.on('error', err=>{
         console.error('AEGIS BROADCAST: peer error', err.type, err);
@@ -2200,7 +2369,7 @@ function initDashboard(){
   });
 
   // nav modules
-  const modules = ['CAMERAS','CLIMATE','AIRSPACE','MAPS','DIAGNOSTICS','SETTINGS'];
+  const modules = ['CAMERAS','CLIMATE','AIRSPACE','MAPS','FACES','SETTINGS'];
   const navGrid = $('navGrid');
   navGrid.innerHTML = '';
   modules.forEach(m=>{
@@ -2213,6 +2382,7 @@ function initDashboard(){
       if(m === 'CLIMATE') openClimateModule();
       if(m === 'AIRSPACE') openAirspaceModule();
       if(m === 'MAPS') openMapsModule();
+      if(m === 'FACES') openFacesModule();
     };
     navGrid.appendChild(tile);
   });
