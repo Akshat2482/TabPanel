@@ -1323,38 +1323,103 @@ function unlockDashboard(){
 // Pick your own unique ID here so nobody else on PeerJS's public broker collides with it.
 // Use the SAME value in both places it appears in this file.
 const REMOTE_PEER_ID = 'aegis-laptop-akshat-9214';
-const FACE_CAPTURES_KEY = 'aegis:face-captures';
 const FACE_CAPTURES_MAX = 40;
 
 let viewerPeer = null;
 let viewerCall = null;
 let viewerDataConn = null;
-let faceCaptures = [];
 
-function loadFaceCaptures(){
+/* ---- IndexedDB storage for captured faces ---- */
+const FACES_DB_NAME = 'aegis-db';
+const FACES_STORE = 'faceCaptures';
+
+function openFacesDB(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(FACES_DB_NAME, 1);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains(FACES_STORE)){
+        const store = db.createObjectStore(FACES_STORE, { keyPath:'id', autoIncrement:true });
+        store.createIndex('timestamp', 'timestamp');
+      }
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function addFaceCaptureToDB(record){
+  const db = await openFacesDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(FACES_STORE, 'readwrite');
+    tx.objectStore(FACES_STORE).add(record);
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+async function getAllFaceCapturesFromDB(){
+  const db = await openFacesDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(FACES_STORE, 'readonly');
+    const req = tx.objectStore(FACES_STORE).getAll();
+    req.onsuccess = ()=> resolve(req.result.sort((a,b)=> b.timestamp - a.timestamp));
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function trimFaceCapturesDB(max){
+  const db = await openFacesDB();
+  const all = await getAllFaceCapturesFromDB(); // newest first
+  if(all.length <= max) return;
+  const toDelete = all.slice(max);
+  const tx = db.transaction(FACES_STORE, 'readwrite');
+  const store = tx.objectStore(FACES_STORE);
+  toDelete.forEach(rec => store.delete(rec.id));
+}
+
+function loadImageFromDataUrl(dataUrl){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=> resolve(img);
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+// Runs the SAME geometric face-matching used for login, but on the received
+// snapshot, comparing it against the tablet's own enrolled descriptor. The
+// descriptor never leaves the tablet — the laptop just sends raw images and
+// the tablet decides locally whether it's "me" or someone else.
+async function isCapturedFaceTheOwner(dataUrl){
+  if(!enrolledDescriptor || !modelsReady) return false; // can't verify — treat as unknown, keep it
   try{
-    const raw = localStorage.getItem(FACE_CAPTURES_KEY);
-    if(raw) faceCaptures = JSON.parse(raw);
+    const img = await loadImageFromDataUrl(dataUrl);
+    const det = await Promise.race([
+      faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 })).withFaceLandmarks(true),
+      new Promise((_, reject)=> setTimeout(()=> reject(new Error('timeout')), 4000))
+    ]);
+    if(!det) return false; // no face re-detected in the crop — keep it, can't confirm
+    const desc = computeGeoDescriptor(det.landmarks);
+    const dist = faceapi.euclideanDistance(desc, enrolledDescriptor);
+    console.debug('AEGIS FACES: owner-check distance =', dist.toFixed(3));
+    return dist < MATCH_THRESHOLD;
   }catch(e){
-    console.warn('AEGIS FACES: load failed', e.message);
+    console.warn('AEGIS FACES: owner-check failed, keeping capture —', e.message);
+    return false;
   }
 }
-function saveFaceCaptures(){
-  try{
-    localStorage.setItem(FACE_CAPTURES_KEY, JSON.stringify(faceCaptures.slice(0, FACE_CAPTURES_MAX)));
-  }catch(e){
-    console.warn('AEGIS FACES: save failed (storage may be full)', e.message);
-  }
-}
-loadFaceCaptures();
 
-function renderFacesGallery(){
+async function renderFacesGallery(){
   const grid = $('facesGrid');
-  if(faceCaptures.length === 0){
+  let captures = [];
+  try{
+    captures = await getAllFaceCapturesFromDB();
+  }catch(e){
+    console.error('AEGIS FACES: failed to read from IndexedDB', e.message);
+  }
+  if(captures.length === 0){
     grid.innerHTML = '<div class="faces-empty">No faces captured yet — open the laptop camera (CAMERAS module) to start tracking.</div>';
     return;
   }
-  grid.innerHTML = faceCaptures.map(f => `
+  grid.innerHTML = captures.map(f => `
     <div class="face-card">
       <img src="${f.image}" alt="captured face">
       <div class="face-time">${new Date(f.timestamp).toLocaleTimeString('en-US',{hour12:false})}</div>
@@ -1411,13 +1476,21 @@ function ensureLaptopConnection(){
     const conn = viewerPeer.connect(REMOTE_PEER_ID);
     viewerDataConn = conn;
     conn.on('open', ()=> console.log('AEGIS CAM: data connection open, face tracking active'));
-    conn.on('data', data=>{
-      if(data && data.type === 'face-capture'){
-        faceCaptures.unshift({ image: data.image, timestamp: data.timestamp });
-        faceCaptures = faceCaptures.slice(0, FACE_CAPTURES_MAX);
-        saveFaceCaptures();
-        logLine($('dashLog'), ' FACES — new capture from laptop cam');
+    conn.on('data', async data=>{
+      if(!data || data.type !== 'face-capture') return;
+      try{
+        const isOwner = await isCapturedFaceTheOwner(data.image);
+        if(isOwner){
+          console.log('AEGIS FACES: capture matched enrolled face — discarding');
+          logLine($('dashLog'), ' FACES — matched owner, not saved');
+          return;
+        }
+        await addFaceCaptureToDB({ image: data.image, timestamp: data.timestamp });
+        await trimFaceCapturesDB(FACE_CAPTURES_MAX);
+        logLine($('dashLog'), ' FACES — new capture saved (unrecognized face)');
         if($('facesModal').classList.contains('active')) renderFacesGallery();
+      }catch(e){
+        console.error('AEGIS FACES: failed to process capture', e.message);
       }
     });
     conn.on('error', err=> console.error('AEGIS CAM: data connection error', err));
